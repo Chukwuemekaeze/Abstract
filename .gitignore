@@ -1,0 +1,73 @@
+# ---- Secrets and local environment ----
+# Never commit real credentials, master keys, or connection strings.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+wheels/
+.installed.cfg
+
+# Test and coverage artifacts
+.pytest_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# Alembic: keep versioned migrations, ignore nothing special here by default
+
+# ---- Node / frontend ----
+node_modules/
+.pnp
+.pnp.js
+dist/
+dist-ssr/
+build/
+.vite/
+*.local
+
+# ---- Logs ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Editor / OS ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Docker ----
+# Local compose overrides
+docker-compose.override.yml
+

@@ -1,0 +1,47 @@
+# Dev dependencies for the deployment pipeline.
+#
+# Two services:
+#   redis    - required cache, persistence fully disabled (see below).
+#   postgres - LOCAL development database only. The production target is a hosted
+#              Neon database; backend/.env DATABASE_URL points at Neon for real use.
+#              This local Postgres exists so you can run migrations and the test
+#              suite without a network round trip. It is not the production endpoint.
+#
+# Redis persistence is intentionally fully disabled:
+#   --appendonly no   turns off AOF
+#   --save ""         turns off RDB snapshots
+# and there is no volume mounted. Redis caches DECRYPTED SSH private keys for the
+# duration of SSH_KEY_CACHE_TTL_MINUTES. Those plaintext secrets must never be
+# written to disk and must not survive a container restart. Keeping the data
+# ephemeral and in memory only is a security requirement, not a convenience choice.
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: deploy-pipeline-redis
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "6379:6379"
+    # No volumes on purpose. Data is in memory only and discarded on restart.
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: deploy-pipeline-postgres
+    environment:
+      POSTGRES_USER: deploy
+      POSTGRES_PASSWORD: deploy
+      POSTGRES_DB: deploy_pipeline
+    ports:
+      - "5432:5432"
+    # The test database (deploy_pipeline_test) is created on demand by the test
+    # suite itself (see backend/tests/conftest.py), so no init script is needed.
+    volumes:
+      - deploy_pipeline_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deploy -d deploy_pipeline"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  # Local dev data only. Safe to remove with: docker compose -f docker-compose.dev.yml down -v
+  deploy_pipeline_pgdata:

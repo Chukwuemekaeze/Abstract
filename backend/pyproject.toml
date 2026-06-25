@@ -1,0 +1,37 @@
+[project]
+name = "deploy-pipeline-backend"
+version = "0.1.0"
+description = "Open source deployment pipeline backend (server registration, TOFU host key verification, SSH key install, smoke test deploy)."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "alembic",
+    "redis>=5.0",
+    "asyncssh",
+    "cryptography",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "pytest-mock",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
