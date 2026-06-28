@@ -18,6 +18,11 @@ class User(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    # Clerk's user id (e.g. "user_2abc..."). Identity always enters through the
+    # verified Clerk JWT, never from the client directly.
+    clerk_user_id: Mapped[str] = mapped_column(
+        String, unique=True, nullable=False, index=True
+    )
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

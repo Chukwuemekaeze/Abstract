@@ -10,7 +10,6 @@ so the mocked SSH and key provider tests can still run anywhere.
 import base64
 import os
 import secrets
-from uuid import UUID
 
 # Configure environment before importing app modules.
 os.environ.setdefault(
@@ -21,6 +20,12 @@ os.environ.setdefault(
     base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
 )
 os.environ.setdefault("KEY_PROVIDER", "env")
+# Clerk settings are required at import time. Tests never hit Clerk; the auth
+# dependency is mocked, so these are placeholders.
+os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_placeholder")
+os.environ.setdefault("CLERK_PUBLISHABLE_KEY", "pk_test_placeholder")
+os.environ.setdefault("CLERK_JWT_ISSUER", "https://placeholder.clerk.accounts.dev")
+os.environ.setdefault("CLERK_AUTHORIZED_PARTIES", "http://localhost:5173")
 
 import asyncio  # noqa: E402
 
@@ -34,16 +39,23 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     create_async_engine,
 )
 
-from app.config import get_settings  # noqa: E402
+from app.clerk import get_clerk_client  # noqa: E402
 from app.db import Base, get_db  # noqa: E402
-from app.deps.auth import get_current_user  # noqa: E402
+from app.deps.auth import (  # noqa: E402
+    ClerkAuthState,
+    get_clerk_auth_state,
+    get_current_session_id,
+    get_current_user,
+)
 from app.deps.services import get_ssh_service  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User  # noqa: E402
 from app.redis_client import get_redis  # noqa: E402
 
-DEV_USER_ID = UUID(get_settings().dev_user_id)
-OTHER_USER_ID = UUID("00000000-0000-0000-0000-0000000000ff")
+# Deterministic Clerk identity used by the mocked auth fixtures.
+TEST_CLERK_USER_ID = "user_test_123"
+TEST_SESSION_ID = "sess_test_123"
+OTHER_CLERK_USER_ID = "user_other_456"
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -110,8 +122,8 @@ async def db_session() -> AsyncSession:
 
 
 @pytest_asyncio.fixture
-async def dev_user(db_session: AsyncSession) -> User:
-    user = User(id=DEV_USER_ID, email="dev@localhost")
+async def test_user(db_session: AsyncSession) -> User:
+    user = User(clerk_user_id=TEST_CLERK_USER_ID, email="test@localhost")
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
@@ -119,8 +131,8 @@ async def dev_user(db_session: AsyncSession) -> User:
 
 
 @pytest_asyncio.fixture
-async def other_user(db_session: AsyncSession) -> User:
-    user = User(id=OTHER_USER_ID, email="other@localhost")
+async def other_test_user(db_session: AsyncSession) -> User:
+    user = User(clerk_user_id=OTHER_CLERK_USER_ID, email="other@localhost")
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
@@ -141,11 +153,13 @@ class FakeRedis:
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession, dev_user: User):
+async def client(db_session: AsyncSession, test_user: User):
     """httpx client wired to the app with DB, auth, redis, and SSH overridden.
 
-    get_ssh_service is left to be overridden per test via app.dependency_overrides
-    using the mock_ssh fixture.
+    Auth is short circuited: get_current_user returns the seeded test_user and
+    get_current_session_id returns a deterministic session id, so route tests run
+    without hitting Clerk. get_ssh_service is left to be overridden per test via
+    app.dependency_overrides using the mock_ssh fixture.
     """
 
     async def override_get_db():
@@ -153,18 +167,70 @@ async def client(db_session: AsyncSession, dev_user: User):
         yield db_session
 
     async def override_get_current_user():
-        return dev_user
+        return test_user
+
+    async def override_get_current_session_id():
+        return TEST_SESSION_ID
 
     async def override_get_redis():
         return FakeRedis()
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[get_current_session_id] = override_get_current_session_id
     app.dependency_overrides[get_redis] = override_get_redis
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def mock_clerk_auth(mocker):
+    """Override get_clerk_auth_state to return a deterministic verified identity.
+
+    Lets the real get_current_user run (against the test DB) without calling Clerk.
+    """
+
+    async def override_get_clerk_auth_state() -> ClerkAuthState:
+        return ClerkAuthState(
+            clerk_user_id=TEST_CLERK_USER_ID, session_id=TEST_SESSION_ID
+        )
+
+    app.dependency_overrides[get_clerk_auth_state] = override_get_clerk_auth_state
+    yield
+    app.dependency_overrides.pop(get_clerk_auth_state, None)
+
+
+@pytest_asyncio.fixture
+async def unauthenticated_client(db_session: AsyncSession, mocker):
+    """Client with DB and redis overridden but the real auth dependency in place.
+
+    The Clerk client is replaced by a mock so tests can drive token verification
+    outcomes (signed out, raising) without network access. Yields (client, clerk_mock).
+    """
+
+    async def override_get_db():
+        yield db_session
+
+    async def override_get_redis():
+        return FakeRedis()
+
+    clerk_mock = mocker.MagicMock()
+    # Default: no valid session.
+    clerk_mock.authenticate_request.return_value = mocker.MagicMock(
+        is_signed_in=False, payload=None
+    )
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = override_get_redis
+    app.dependency_overrides[get_clerk_client] = lambda: clerk_mock
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac, clerk_mock
 
     app.dependency_overrides.clear()
 
@@ -185,7 +251,7 @@ def mock_ssh(mocker):
     service.install_key = mocker.AsyncMock(return_value=None)
     service.run_command = mocker.AsyncMock(
         return_value=CommandResult(
-            stdout="hello from deployment pipeline\nLinux test\n",
+            stdout="hello from Abstract\nLinux test\n",
             stderr="",
             exit_status=0,
         )

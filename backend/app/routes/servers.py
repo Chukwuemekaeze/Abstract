@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.deps.auth import get_current_user
+from app.deps.auth import get_current_session_id, get_current_user
 from app.deps.server_ownership import get_owned_server
 from app.deps.services import get_key_provider_dep, get_ssh_service
 from app.models import AppSshKey, Server, User
@@ -201,6 +201,7 @@ async def get_server(
 async def smoke_test(
     server: Server = Depends(get_owned_server),
     current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
     ssh: SSHService = Depends(get_ssh_service),
@@ -219,7 +220,8 @@ async def smoke_test(
         result = await ssh.run_command(
             server=server,
             user_id=current_user.id,
-            command="echo 'hello from deployment pipeline' && uname -a && date",
+            session_id=session_id,
+            command="echo 'hello from Abstract' && uname -a && date",
             redis=redis,
             db=db,
             key_provider=key_provider,

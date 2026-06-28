@@ -25,30 +25,30 @@ async def _make_server(db_session, user_id, status="verified") -> Server:
 
 
 @requires_db
-async def test_returns_server_for_owner(db_session, dev_user):
-    server = await _make_server(db_session, dev_user.id)
+async def test_returns_server_for_owner(db_session, test_user):
+    server = await _make_server(db_session, test_user.id)
     result = await get_owned_server(
-        server_id=server.id, current_user=dev_user, db=db_session
+        server_id=server.id, current_user=test_user, db=db_session
     )
     assert result.id == server.id
 
 
 @requires_db
-async def test_returns_404_for_other_users_server(db_session, dev_user, other_user):
-    server = await _make_server(db_session, other_user.id)
+async def test_returns_404_for_other_users_server(db_session, test_user, other_test_user):
+    server = await _make_server(db_session, other_test_user.id)
     with pytest.raises(HTTPException) as exc_info:
         await get_owned_server(
-            server_id=server.id, current_user=dev_user, db=db_session
+            server_id=server.id, current_user=test_user, db=db_session
         )
     assert exc_info.value.status_code == 404
 
 
 @requires_db
-async def test_returns_404_for_missing_server(db_session, dev_user):
+async def test_returns_404_for_missing_server(db_session, test_user):
     from uuid import uuid4
 
     with pytest.raises(HTTPException) as exc_info:
         await get_owned_server(
-            server_id=uuid4(), current_user=dev_user, db=db_session
+            server_id=uuid4(), current_user=test_user, db=db_session
         )
     assert exc_info.value.status_code == 404

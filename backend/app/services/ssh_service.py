@@ -12,7 +12,6 @@ All methods are async. No paramiko, no thread pools.
 
 from __future__ import annotations
 
-import logging
 import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,10 +23,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.logging_config import logger
 from app.models import AppSshKey, Server
 from app.services.key_provider import KeyProvider
-
-logger = logging.getLogger(__name__)
 
 
 # Connection pool. Maps (user_id, server_id) -> (connection, last_used_at).
@@ -249,6 +247,7 @@ class SSHService:
         self,
         server: Server,
         user_id: UUID,
+        session_id: str,
         redis: aioredis.Redis,
         db: AsyncSession,
         key_provider: KeyProvider,
@@ -261,7 +260,9 @@ class SSHService:
             _connection_pool[pool_key] = (conn, _now())
             return conn
 
-        key_bytes = await self._load_private_key(user_id, redis, db, key_provider)
+        key_bytes = await self._load_private_key(
+            user_id, session_id, redis, db, key_provider
+        )
         known_hosts = _known_hosts_for(server)
 
         try:
@@ -287,12 +288,15 @@ class SSHService:
         self,
         server: Server,
         user_id: UUID,
+        session_id: str,
         command: str,
         redis: aioredis.Redis,
         db: AsyncSession,
         key_provider: KeyProvider,
     ) -> CommandResult:
-        conn = await self.get_connection(server, user_id, redis, db, key_provider)
+        conn = await self.get_connection(
+            server, user_id, session_id, redis, db, key_provider
+        )
         result = await conn.run(command, check=False)
         return CommandResult(
             stdout=result.stdout or "",
@@ -303,13 +307,14 @@ class SSHService:
     async def _load_private_key(
         self,
         user_id: UUID,
+        session_id: str,
         redis: aioredis.Redis,
         db: AsyncSession,
         key_provider: KeyProvider,
     ) -> bytes:
-        # Cache marker is fixed because auth is stubbed. With real auth this would
-        # be the session id.
-        cache_key = f"ssh_key:{user_id}:dev-session"
+        # Scoped per Clerk login. Signing out and back in yields a new session id and
+        # a fresh cache entry.
+        cache_key = f"ssh_key:{user_id}:{session_id}"
         cached = await redis.get(cache_key)
         if cached is not None:
             return cached

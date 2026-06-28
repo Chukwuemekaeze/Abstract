@@ -1,11 +1,33 @@
 import axios from 'axios'
 
+import { getAuthToken } from '@/lib/auth-token'
+
 // Single axios instance. baseURL '/api' is proxied to the FastAPI backend in dev
-// (see vite.config.ts). withCredentials is on so cookies work once real auth lands.
+// (see vite.config.ts). Auth is token based: every request carries the Clerk
+// session token in the Authorization header.
 export const apiClient = axios.create({
   baseURL: '/api',
-  withCredentials: true,
 })
+
+// Attach the Clerk session token to every outgoing request.
+apiClient.interceptors.request.use(async (config) => {
+  const token = await getAuthToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// On 401 the session is gone or invalid: bounce to sign in.
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      window.location.href = '/sign-in'
+    }
+    return Promise.reject(error)
+  },
+)
 
 // Pull a human readable message out of an axios error, falling back sensibly.
 export function extractErrorMessage(error: unknown, fallback = 'Something went wrong'): string {

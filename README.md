@@ -8,6 +8,23 @@ installation, and a minimal "deploy hello world" smoke test that proves the SSH
 connection pool works end to end. Actual deployment logic, log tailing, and
 container management are future milestones.
 
+## Authentication
+
+Abstract uses [Clerk](https://clerk.com) for authentication, with GitHub OAuth as the
+sign in method. To run the app locally:
+
+1. Create a Clerk application in the Clerk dashboard.
+2. Enable GitHub as a social connection and request the `repo` scope.
+3. Copy the publishable key and secret key from the dashboard into the env files
+   (see Backend setup and Frontend setup below), and set `CLERK_JWT_ISSUER` to your
+   Clerk instance URL (the Frontend API / Issuer value in the dashboard).
+
+The frontend gates every page behind Clerk: unauthenticated visitors are redirected
+to `/sign-in`. The backend verifies the Clerk session token on every request. The
+first time a user signs in, Abstract lazily creates a matching row in the Postgres
+`users` table (keyed by the Clerk user id, with the email pulled from Clerk). There
+is no separate backend signup flow; Clerk owns the entire account lifecycle.
+
 ## Architecture at a glance
 
 - Backend: async FastAPI, async SQLAlchemy 2.0 (asyncpg), async Redis, asyncssh.
@@ -50,6 +67,11 @@ All commands run from the `backend/` directory unless noted.
      python -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
      ```
 
+   - `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_ISSUER`, and
+     `CLERK_AUTHORIZED_PARTIES`: from your Clerk dashboard (see Authentication above).
+     `CLERK_AUTHORIZED_PARTIES` is a comma separated list of allowed frontend origins
+     (for local dev, `http://localhost:5173`).
+
 3. Start the dev services (Redis, and the local dev Postgres) from the repo root:
 
    ```bash
@@ -60,12 +82,13 @@ All commands run from the `backend/` directory unless noted.
    `docker compose -f docker-compose.dev.yml up -d postgres` and point `REDIS_URL`
    at your existing Redis.
 
-4. Run migrations and seed the stubbed dev user:
+4. Run migrations:
 
    ```bash
    .venv/bin/alembic upgrade head
-   .venv/bin/python -m scripts.seed_dev_user
    ```
+
+   There is no user to seed. User rows are created lazily on first sign in via Clerk.
 
 5. Start the API with autoreload:
 
@@ -94,8 +117,12 @@ From the `frontend/` directory:
 
 ```bash
 npm install
+cp .env.example .env.local   # then set VITE_CLERK_PUBLISHABLE_KEY
 npm run dev
 ```
+
+`.env.local` (gitignored) holds `VITE_CLERK_PUBLISHABLE_KEY`, your Clerk publishable
+key. The app throws on startup if it is missing.
 
 The dev server runs on http://localhost:5173 and proxies `/api` to the backend on
 port 8000, so there is no CORS configuration to worry about during development.
@@ -103,7 +130,9 @@ port 8000, so there is no CORS configuration to worry about during development.
 ## Smoke test (end to end)
 
 1. Start the backend (port 8000) and the frontend (port 5173).
-2. Open http://localhost:5173 and click "Add server".
+2. Open http://localhost:5173. You will be redirected to `/sign-in`. Click
+   "Continue with GitHub" and complete the OAuth flow. After signing in you land on
+   the servers page. Click "Add server".
 3. Enter a name, your VPS IP, port (22), username (root), and the root password.
 4. Click Continue. Abstract probes the host and shows its SHA256 fingerprint.
 5. Compare that fingerprint against the one in your VPS provider's console. If they
@@ -111,7 +140,7 @@ port 8000, so there is no CORS configuration to worry about during development.
 6. Abstract installs its public key over the password session, optionally disables
    password authentication, and verifies key based login works.
 7. On the verified server card, click "Run smoke test". You should see the output of
-   `echo 'hello from deployment pipeline' && uname -a && date`, proving the pooled
+   `echo 'hello from Abstract' && uname -a && date`, proving the pooled
    key based SSH connection works end to end.
 
 ## Architecture notes
@@ -138,7 +167,8 @@ possible.
 
 To open a key based connection Abstract needs the decrypted app private key.
 Decrypting on every request is wasteful, so after the first decrypt the plaintext key
-is cached in Redis under `ssh_key:{user_id}:dev-session` with a TTL. Because that
+is cached in Redis under `ssh_key:{user_id}:{session_id}` with a TTL, where
+`session_id` is the Clerk session id so the cache is scoped per login. Because that
 plaintext is sensitive, the dev Redis container runs with `--appendonly no --save ""`
 and no volume: nothing is ever written to disk and the cache does not survive a
 restart.
@@ -154,8 +184,10 @@ server controlled value is required.
 
 User identity always comes from the authenticated session (`current_user.id`), never
 from request input. Every database filter and every Redis key is scoped by that
-server side id. In v1 authentication is stubbed to a seeded dev user, but the same
-rule holds and real auth will slot in without changing call sites.
+server side id. Identity enters the system only through the Clerk session token,
+verified by the backend; the `sub` (Clerk user id) and `sid` (session id) claims are
+read only after signature verification, so they are trusted credentials rather than
+client input.
 
 ### Ownership helper
 

@@ -1,4 +1,4 @@
-# Dev dependencies for the deployment pipeline.
+# Dev dependencies for Abstract.
 #
 # Two services:
 #   redis    - required cache, persistence fully disabled (see below).
