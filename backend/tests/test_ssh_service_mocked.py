@@ -224,6 +224,7 @@ async def test_get_connection_cache_miss_then_hit(mocker):
     redis = FakeRedis()
     server = FakeServer()
     user_id = uuid4()
+    session_id = "sess_test"
 
     conn = FakeConn()
     connect_mock = mocker.patch.object(
@@ -235,14 +236,14 @@ async def test_get_connection_cache_miss_then_hit(mocker):
     service = SSHService()
 
     # Cache miss: loads key from db, decrypts, caches in redis, opens connection.
-    c1 = await service.get_connection(server, user_id, redis, db, provider)
+    c1 = await service.get_connection(server, user_id, session_id, redis, db, provider)
     assert c1 is conn
     assert connect_mock.call_count == 1
     assert db.scalar.call_count == 1
-    assert await redis.get(f"ssh_key:{user_id}:dev-session") == b"PRIVATEKEYBYTES"
+    assert await redis.get(f"ssh_key:{user_id}:{session_id}") == b"PRIVATEKEYBYTES"
 
     # Cache hit: pooled connection reused, no new connect, no new db lookup.
-    c2 = await service.get_connection(server, user_id, redis, db, provider)
+    c2 = await service.get_connection(server, user_id, session_id, redis, db, provider)
     assert c2 is conn
     assert connect_mock.call_count == 1
     assert db.scalar.call_count == 1
@@ -268,6 +269,7 @@ async def test_run_command_returns_result(mocker):
     result = await SSHService().run_command(
         FakeServer(),
         uuid4(),
+        "sess_test",
         "echo 'hello world'",
         FakeRedis(),
         db,

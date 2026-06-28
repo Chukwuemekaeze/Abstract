@@ -11,7 +11,7 @@ from tests.conftest import requires_db
 pytestmark = requires_db
 
 
-async def test_probe_install_smoke_flow(client, mock_ssh, db_session, dev_user):
+async def test_probe_install_smoke_flow(client, mock_ssh, db_session, test_user):
     # Probe: registers the server and returns the fingerprint plus app public key.
     probe_resp = await client.post(
         "/api/servers/probe",
@@ -28,7 +28,7 @@ async def test_probe_install_smoke_flow(client, mock_ssh, db_session, dev_user):
     row = await db_session.scalar(select(Server).where(Server.id == server_id))
     assert row is not None
     assert row.status == "pending_verification"
-    assert row.user_id == dev_user.id
+    assert row.user_id == test_user.id
 
     # Install key: verifies and flips status to verified.
     install_resp = await client.post(
@@ -51,7 +51,7 @@ async def test_probe_install_smoke_flow(client, mock_ssh, db_session, dev_user):
     mock_ssh.run_command.assert_awaited_once()
 
 
-async def test_list_returns_only_current_user_servers(client, mock_ssh, db_session, dev_user):
+async def test_list_returns_only_current_user_servers(client, mock_ssh, db_session, test_user):
     await client.post(
         "/api/servers/probe",
         json={"name": "mine", "host": "203.0.113.11"},
@@ -63,10 +63,10 @@ async def test_list_returns_only_current_user_servers(client, mock_ssh, db_sessi
     assert servers[0]["name"] == "mine"
 
 
-async def test_other_users_server_returns_404(client, db_session, dev_user, other_user):
+async def test_other_users_server_returns_404(client, db_session, test_user, other_test_user):
     # A server owned by someone else must not be reachable by the dev user.
     foreign = Server(
-        user_id=other_user.id,
+        user_id=other_test_user.id,
         name="foreign",
         host="203.0.113.99",
         port=22,
@@ -92,9 +92,9 @@ async def test_probe_missing_fields_returns_422(client):
     assert resp.status_code == 422
 
 
-async def test_install_key_rejected_when_not_pending(client, mock_ssh, db_session, dev_user):
+async def test_install_key_rejected_when_not_pending(client, mock_ssh, db_session, test_user):
     server = Server(
-        user_id=dev_user.id,
+        user_id=test_user.id,
         name="already",
         host="203.0.113.12",
         port=22,
@@ -111,3 +111,34 @@ async def test_install_key_rejected_when_not_pending(client, mock_ssh, db_sessio
         json={"password": "hunter2"},
     )
     assert resp.status_code == 400
+
+
+async def test_no_auth_header_returns_401(unauthenticated_client):
+    # No token: Clerk reports signed out, so the auth dependency rejects with 401.
+    ac, _clerk = unauthenticated_client
+    resp = await ac.get("/api/servers")
+    assert resp.status_code == 401
+
+
+async def test_invalid_token_returns_401(unauthenticated_client, mocker):
+    # A token that fails verification: Clerk returns is_signed_in False.
+    ac, clerk = unauthenticated_client
+    clerk.authenticate_request.return_value = mocker.MagicMock(
+        is_signed_in=False, payload=None
+    )
+    resp = await ac.get(
+        "/api/servers", headers={"Authorization": "Bearer not-a-real-jwt"}
+    )
+    assert resp.status_code == 401
+
+
+async def test_malformed_token_returns_401(unauthenticated_client, mocker):
+    # Verified but missing the session id claim: rejected as malformed.
+    ac, clerk = unauthenticated_client
+    clerk.authenticate_request.return_value = mocker.MagicMock(
+        is_signed_in=True, payload={"sub": "user_x"}
+    )
+    resp = await ac.get(
+        "/api/servers", headers={"Authorization": "Bearer partial-token"}
+    )
+    assert resp.status_code == 401

@@ -1,24 +1,43 @@
-// App shell: wires the TanStack Query provider, the router (single route for v1),
-// and the global sonner Toaster.
+// App shell: registers the Clerk token getter for the axios client, defines the
+// routes (public sign in / sign up, protected servers page), and mounts the global
+// sonner Toaster. Providers (Clerk, Query, Router) live in main.tsx.
 
-import { QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { useAuth } from '@clerk/clerk-react'
+import { useEffect } from 'react'
+import { Route, Routes } from 'react-router-dom'
 
+import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Toaster } from '@/components/ui/sonner'
-import { queryClient } from '@/lib/queryClient'
+import { setTokenGetter } from '@/lib/auth-token'
 import { ServersPage } from '@/pages/ServersPage'
+import { SignInPage } from '@/pages/SignInPage'
+import { SignUpPage } from '@/pages/SignUpPage'
 
 function App() {
+  const { getToken } = useAuth()
+
+  // Bridge Clerk's getToken into the module level axios interceptor.
+  useEffect(() => {
+    setTokenGetter(() => getToken())
+  }, [getToken])
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<ServersPage />} />
-        </Routes>
-      </BrowserRouter>
+    <>
+      <Routes>
+        <Route path="/sign-in/*" element={<SignInPage />} />
+        <Route path="/sign-up/*" element={<SignUpPage />} />
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <ServersPage />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
       {/* Global toast outlet, mounted once at the root. */}
       <Toaster richColors />
-    </QueryClientProvider>
+    </>
   )
 }
 

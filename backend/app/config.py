@@ -5,8 +5,10 @@ exposed here both as raw minutes and as computed seconds for use in code.
 """
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -23,8 +25,24 @@ class Settings(BaseSettings):
     app_master_key: str
     key_provider: str = "env"
 
-    dev_user_id: str = "00000000-0000-0000-0000-000000000001"
-    dev_user_email: str = "dev@localhost"
+    # Clerk authentication. All values come from the Clerk dashboard.
+    clerk_secret_key: str
+    # Kept for reference and any future issuer/CORS derivation.
+    clerk_publishable_key: str
+    clerk_jwt_issuer: str
+    # Frontend origins permitted to present Clerk tokens. Set in the environment as
+    # a comma separated list (e.g. "http://localhost:5173,https://yourapp.com").
+    # NoDecode disables pydantic-settings' default JSON parsing for this list field
+    # so the validator below receives the raw string.
+    clerk_authorized_parties: Annotated[list[str], NoDecode]
+
+    @field_validator("clerk_authorized_parties", mode="before")
+    @classmethod
+    def _split_authorized_parties(cls, value: object) -> object:
+        # Accept a plain comma separated string and turn it into trimmed origins.
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
 
     # Stored in minutes in the environment.
     session_ttl_minutes: int = 10080
