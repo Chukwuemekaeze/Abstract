@@ -1,8 +1,7 @@
 """Async SQLAlchemy engine, session factory, and FastAPI dependency."""
+
 import ssl
 from collections.abc import AsyncGenerator
-
-ssl_ctx = ssl.create_default_context()
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -13,6 +12,9 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import get_settings
 
+# TLS context for the asyncpg driver.
+ssl_ctx = ssl.create_default_context()
+
 
 class Base(DeclarativeBase):
     pass
@@ -21,11 +23,11 @@ class Base(DeclarativeBase):
 _settings = get_settings()
 
 engine = create_async_engine(
-    _settings.database_url, 
+    _settings.database_url,
     future=True,
     pool_pre_ping=True,
-    connect_args={"ssl": ssl_ctx}
-    )
+    connect_args={"ssl": ssl_ctx},
+)
 
 async_session_factory = async_sessionmaker(
     engine,
