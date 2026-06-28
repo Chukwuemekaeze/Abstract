@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings",
     "python-dotenv",
+    "loguru>=0.7,<1",
 ]
 
 [project.optional-dependencies]
