@@ -140,7 +140,7 @@ port 8000, so there is no CORS configuration to worry about during development.
 6. Abstract installs its public key over the password session, optionally disables
    password authentication, and verifies key based login works.
 7. On the verified server card, click "Run smoke test". You should see the output of
-   `echo 'hello from deployment pipeline' && uname -a && date`, proving the pooled
+   `echo 'hello from Abstract' && uname -a && date`, proving the pooled
    key based SSH connection works end to end.
 
 ## Architecture notes

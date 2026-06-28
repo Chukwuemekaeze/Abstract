@@ -251,7 +251,7 @@ def mock_ssh(mocker):
     service.install_key = mocker.AsyncMock(return_value=None)
     service.run_command = mocker.AsyncMock(
         return_value=CommandResult(
-            stdout="hello from deployment pipeline\nLinux test\n",
+            stdout="hello from Abstract\nLinux test\n",
             stderr="",
             exit_status=0,
         )

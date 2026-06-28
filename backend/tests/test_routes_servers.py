@@ -47,7 +47,7 @@ async def test_probe_install_smoke_flow(client, mock_ssh, db_session, test_user)
     assert smoke_resp.status_code == 200, smoke_resp.text
     smoke = smoke_resp.json()
     assert smoke["exit_status"] == 0
-    assert "hello from deployment pipeline" in smoke["stdout"]
+    assert "hello from Abstract" in smoke["stdout"]
     mock_ssh.run_command.assert_awaited_once()
 
 

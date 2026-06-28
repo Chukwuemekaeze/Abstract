@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
     clear_pool()
 
 
-app = FastAPI(title="Deployment Pipeline", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Abstract", version="0.1.0", lifespan=lifespan)
 
 # The Vite dev proxy hides CORS in local dev, but proper CORS is correct for any
 # direct calls and for prod where the frontend and backend may be on different

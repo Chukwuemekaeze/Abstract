@@ -48,7 +48,7 @@ class FakeConn:
         if "sshd -T" in command:
             return FakeProcResult(stdout="passwordauthentication no\n")
         if stripped.startswith("echo 'hello"):
-            return FakeProcResult(stdout="hello from deployment pipeline\n")
+            return FakeProcResult(stdout="hello from Abstract\n")
         return FakeProcResult(stdout="", stderr="", exit_status=0)
 
     def close(self):

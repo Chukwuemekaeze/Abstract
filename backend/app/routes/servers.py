@@ -221,7 +221,7 @@ async def smoke_test(
             server=server,
             user_id=current_user.id,
             session_id=session_id,
-            command="echo 'hello from deployment pipeline' && uname -a && date",
+            command="echo 'hello from Abstract' && uname -a && date",
             redis=redis,
             db=db,
             key_provider=key_provider,
