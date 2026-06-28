@@ -23,7 +23,7 @@ export function ServerList() {
   if (isError) {
     return (
       <p className="py-12 text-destructive">
-        Could not load servers. Is the backend running?
+        Something went wrong while loading your servers. Please try again later.
       </p>
     )
   }
