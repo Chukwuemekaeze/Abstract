@@ -8,11 +8,12 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.db import Base
+from app.db import Base, ssl_ctx
 
 # Import models so their tables are registered on Base.metadata.
 import app.models  # noqa: F401
@@ -51,10 +52,15 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_migrations_online() -> None:
+    # Remote Postgres (Neon) requires TLS, mirroring app.db. Local Postgres does not
+    # support it, so connect plaintext for localhost.
+    host = make_url(settings.database_url).host
+    connect_args = {} if host in ("localhost", "127.0.0.1") else {"ssl": ssl_ctx}
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=NullPool,
+        connect_args=connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
@@ -22,11 +23,18 @@ class Base(DeclarativeBase):
 
 _settings = get_settings()
 
+# We connect through Neon's connection pooler, which already pools server side and
+# closes idle connections. Holding our own long lived pool on top of that leads to
+# reuse of connections Neon has dropped, surfacing as TLS "bad record mac" errors
+# that asyncpg does not report as disconnects (so pool_pre_ping cannot recover).
+# NullPool opens a fresh connection per checkout and disposes it on return, which
+# avoids stale reuse. statement_cache_size=0 disables asyncpg prepared statement
+# caching, required when sitting behind a PgBouncer style transaction pooler.
 engine = create_async_engine(
     _settings.database_url,
     future=True,
-    pool_pre_ping=True,
-    connect_args={"ssl": ssl_ctx},
+    poolclass=NullPool,
+    connect_args={"ssl": ssl_ctx, "statement_cache_size": 0},
 )
 
 async_session_factory = async_sessionmaker(
