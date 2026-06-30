@@ -249,6 +249,52 @@ async def test_get_connection_cache_miss_then_hit(mocker):
     assert db.scalar.call_count == 1
 
 
+async def test_get_connection_reconnects_when_username_changed(mocker):
+    """A pooled connection whose username no longer matches is dropped and reopened.
+
+    Models a rolled-back sudo-user switch: the pooled connection was opened as one
+    user but the server now reports a different one, so reusing it would run commands
+    with the wrong identity.
+    """
+    from tests.conftest import FakeRedis
+
+    master_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+    provider = EnvKeyProvider(master_key)
+    encrypted = await provider.encrypt(b"PRIVATEKEYBYTES")
+    fake_app_key = mocker.MagicMock(encrypted_private_key=encrypted)
+
+    db = mocker.MagicMock()
+    db.scalar = mocker.AsyncMock(return_value=fake_app_key)
+    db.commit = mocker.AsyncMock()
+
+    redis = FakeRedis()
+    server = FakeServer()
+    user_id = uuid4()
+
+    first_conn = FakeConn()
+    second_conn = FakeConn()
+    connect_mock = mocker.patch.object(
+        ssh_mod.asyncssh,
+        "connect",
+        side_effect=[FakeConnect(first_conn), FakeConnect(second_conn)],
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    service = SSHService()
+
+    c1 = await service.get_connection(server, user_id, "sess", redis, db, provider)
+    assert c1 is first_conn
+    assert connect_mock.call_count == 1
+
+    # Identity changes (as create_sudo_user would do, then a rollback reverts the DB).
+    server.username = "deploy"
+    c2 = await service.get_connection(server, user_id, "sess", redis, db, provider)
+    assert c2 is second_conn  # reconnected, not the stale root connection
+    assert connect_mock.call_count == 2
+    assert first_conn.closed is True  # stale connection was closed
+
+
 async def test_run_command_returns_result(mocker):
     from tests.conftest import FakeRedis
 

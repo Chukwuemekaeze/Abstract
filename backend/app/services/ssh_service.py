@@ -32,9 +32,12 @@ from app.services.sshd_config import (
 )
 
 
-# Connection pool. Maps (user_id, server_id) -> (connection, last_used_at).
+# Connection pool. Maps (user_id, server_id) -> (connection, last_used_at, username).
+# The username is recorded so a pooled connection whose login identity no longer
+# matches the server (for example after a hardening transaction that switched to a
+# sudo user was rolled back) is discarded rather than reused with the wrong identity.
 _connection_pool: dict[
-    tuple[UUID, UUID], tuple[asyncssh.SSHClientConnection, datetime]
+    tuple[UUID, UUID], tuple[asyncssh.SSHClientConnection, datetime, str]
 ] = {}
 
 
@@ -88,7 +91,7 @@ def _evict_if_stale(key: tuple[UUID, UUID]) -> None:
     entry = _connection_pool.get(key)
     if entry is None:
         return
-    conn, last_used_at = entry
+    conn, last_used_at, _username = entry
     idle_seconds = (_now() - last_used_at).total_seconds()
     if idle_seconds > get_settings().ssh_pool_idle_timeout_seconds:
         conn.close()
@@ -97,7 +100,7 @@ def _evict_if_stale(key: tuple[UUID, UUID]) -> None:
 
 def clear_pool() -> None:
     """Close and drop all pooled connections. Used on shutdown and in tests."""
-    for conn, _ in _connection_pool.values():
+    for conn, _last_used, _username in _connection_pool.values():
         conn.close()
     _connection_pool.clear()
 
@@ -236,9 +239,14 @@ class SSHService:
         _evict_if_stale(pool_key)
         entry = _connection_pool.get(pool_key)
         if entry is not None:
-            conn, _ = entry
-            _connection_pool[pool_key] = (conn, _now())
-            return conn
+            conn, _last_used, pooled_username = entry
+            if pooled_username == server.username:
+                _connection_pool[pool_key] = (conn, _now(), pooled_username)
+                return conn
+            # Identity changed since this connection was pooled. Drop it and open a
+            # fresh one as the current user.
+            conn.close()
+            _connection_pool.pop(pool_key, None)
 
         key_bytes = await self._load_private_key(
             user_id, session_id, redis, db, key_provider
@@ -261,7 +269,7 @@ class SSHService:
                 "verified key on record."
             ) from exc
 
-        _connection_pool[pool_key] = (conn, _now())
+        _connection_pool[pool_key] = (conn, _now(), server.username)
         return conn
 
     def evict_connection(self, user_id: UUID, server_id: UUID) -> None:
@@ -273,7 +281,7 @@ class SSHService:
         """
         entry = _connection_pool.pop((user_id, server_id), None)
         if entry is not None:
-            conn, _ = entry
+            conn, _last_used, _username = entry
             conn.close()
 
     async def ping(
