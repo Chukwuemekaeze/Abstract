@@ -143,6 +143,42 @@ port 8000, so there is no CORS configuration to worry about during development.
    `echo 'hello from Abstract' && uname -a && date`, proving the pooled
    key based SSH connection works end to end.
 
+## Hardening
+
+Once a server is verified you can make it deployment-ready from its detail page
+(click a server name in the list to open `/servers/:id`). Each operation is a card
+with a Run button and, on failure, a collapsible panel showing the captured shell
+output.
+
+Available operations:
+
+- **Update system**: `apt-get update` and `upgrade` (noninteractive).
+- **Install base packages**: git, certbot, ufw, curl, ca-certificates.
+- **Install Docker**: the official `get.docker.com` installer.
+- **Create sudo user**: a non-root user with passwordless sudo and the app deploy
+  key. This is the point where Abstract switches from operating as root to operating
+  as the sudo user.
+- **Disable root login**: sets `PermitRootLogin no` and reloads sshd. Disabled until
+  a sudo user exists, since Abstract refuses to remove root access without a
+  confirmed alternative login.
+- **Disable password authentication**: sets `PasswordAuthentication no` and reloads
+  sshd. Safe because key based login is already verified. Useful when password auth
+  was left enabled at install time.
+- **Configure firewall**: allows OpenSSH, 80, and 443, then enables UFW.
+- **Create swap**: a swap file sized at 25% of the box's RAM (with a 512MB floor).
+- **Reboot**: reboots the box and polls until it comes back online.
+
+**Quick harden** runs the standard sequence in order (update, base packages, Docker,
+sudo user, firewall, swap, disable password authentication, disable root login).
+Reboot is intentionally excluded so the connection is not dropped mid-sequence.
+
+Quick harden and each individual operation are **atomic at the database level**: the
+SSH commands and the resulting state writes run inside a single transaction that
+commits only on success. If anything fails, the transaction rolls back and Abstract's
+recorded state for the server is unchanged. The VPS itself may be partially changed
+after a failure (we cannot undo `apt upgrade` or a Docker install), so every shell
+command is written to be idempotent, which makes retries safe and correct.
+
 ## Architecture notes
 
 ### Trust on first use (TOFU)
