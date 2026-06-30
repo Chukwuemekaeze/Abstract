@@ -3,6 +3,7 @@
 // SSH path and shows the command output inline.
 
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -67,7 +68,11 @@ export function ServerCard({ server }: { server: Server }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{server.name}</CardTitle>
+        <CardTitle>
+          <Link to={`/servers/${server.id}`} className="hover:underline">
+            {server.name}
+          </Link>
+        </CardTitle>
         <CardDescription>
           {server.username}@{server.host}:{server.port}
         </CardDescription>

@@ -27,6 +27,14 @@ export interface Server {
   verification_source: string
   created_at: string
   verified_at: string | null
+  // Hardening state.
+  sudo_user_name: string | null
+  root_login_disabled: boolean
+  firewall_enabled: boolean
+  docker_installed: boolean
+  base_packages_installed: boolean
+  swap_configured: boolean
+  last_system_update_at: string | null
 }
 
 // Returned by POST /servers/probe: the new server id plus the data the user needs
@@ -144,6 +152,87 @@ export function useSmokeTestMutation() {
     mutationFn: async (serverId: string): Promise<CommandResult> => {
       const { data } = await apiClient.post<CommandResult>(
         `/servers/${serverId}/smoke_test`,
+      )
+      return data
+    },
+  })
+}
+
+// --- Hardening ------------------------------------------------------------
+//
+// Each hardening operation returns the updated Server. They all invalidate the
+// detail query (so the page reflects new state) and the list query (so badges on
+// the list page update too). A shared factory keeps them consistent.
+
+function useHardeningMutation<TBody = void>(op: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (args: {
+      serverId: string
+      body?: TBody
+    }): Promise<Server> => {
+      const { data } = await apiClient.post<Server>(
+        `/servers/${args.serverId}/harden/${op}`,
+        args.body ?? {},
+      )
+      return data
+    },
+    onSuccess: (server) => {
+      qc.invalidateQueries({ queryKey: serverKeys.detail(server.id) })
+      qc.invalidateQueries({ queryKey: serverKeys.all })
+    },
+  })
+}
+
+export interface SudoUserBody {
+  sudo_user_name: string
+}
+
+export const useUpdateSystemMutation = () => useHardeningMutation('update_system')
+export const useInstallBasePackagesMutation = () =>
+  useHardeningMutation('install_base_packages')
+export const useInstallDockerMutation = () => useHardeningMutation('install_docker')
+export const useCreateSudoUserMutation = () =>
+  useHardeningMutation<SudoUserBody>('create_sudo_user')
+export const useDisableRootLoginMutation = () =>
+  useHardeningMutation('disable_root_login')
+export const useDisablePasswordAuthMutation = () =>
+  useHardeningMutation('disable_password_auth')
+export const useConfigureFirewallMutation = () =>
+  useHardeningMutation('configure_firewall')
+export const useCreateSwapMutation = () => useHardeningMutation('create_swap')
+export const useRebootMutation = () => useHardeningMutation('reboot')
+export const useQuickHardenMutation = () =>
+  useHardeningMutation<SudoUserBody>('quick_harden')
+
+// One-shot ping (used for a manual retry after a reboot timeout).
+export function usePingServerMutation() {
+  return useMutation({
+    mutationFn: async (serverId: string): Promise<{ status: string }> => {
+      const { data } = await apiClient.post<{ status: string }>(
+        `/servers/${serverId}/ping`,
+      )
+      return data
+    },
+  })
+}
+
+// Polling ping used during a reboot. Disabled until enabled is true, then refetches
+// on the given interval. retry is off so each poll is a single attempt and a 503
+// (still down) surfaces immediately as an error rather than being retried.
+export function useServerPing(
+  id: string | undefined,
+  options: { enabled: boolean; refetchInterval: number },
+) {
+  return useQuery({
+    queryKey: ['servers', id, 'ping'],
+    enabled: Boolean(id) && options.enabled,
+    refetchInterval: options.refetchInterval,
+    retry: false,
+    gcTime: 0,
+    queryFn: async (): Promise<{ status: string }> => {
+      const { data } = await apiClient.post<{ status: string }>(
+        `/servers/${id}/ping`,
       )
       return data
     },

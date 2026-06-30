@@ -22,6 +22,19 @@ class InstallKeyRequest(BaseModel):
     disable_password_auth: bool = True
 
 
+# A valid lowercase Linux username: starts with a letter or underscore, then
+# lowercase letters, digits, underscores, or hyphens.
+_LINUX_USERNAME = r"^[a-z_][a-z0-9_-]*$"
+
+
+class CreateSudoUserRequest(BaseModel):
+    sudo_user_name: str = Field(min_length=1, max_length=32, pattern=_LINUX_USERNAME)
+
+
+class QuickHardenRequest(BaseModel):
+    sudo_user_name: str = Field(min_length=1, max_length=32, pattern=_LINUX_USERNAME)
+
+
 class ProbeResponse(BaseModel):
     server_id: UUID
     fingerprint_sha256: str
@@ -43,6 +56,15 @@ class ServerResponse(BaseModel):
     verification_source: str
     created_at: datetime
     verified_at: datetime | None
+
+    # Hardening state. All safe to expose (no secrets).
+    sudo_user_name: str | None
+    root_login_disabled: bool
+    firewall_enabled: bool
+    docker_installed: bool
+    base_packages_installed: bool
+    swap_configured: bool
+    last_system_update_at: datetime | None
 
 
 class CommandResultResponse(BaseModel):

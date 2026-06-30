@@ -26,11 +26,18 @@ from app.config import get_settings
 from app.logging_config import logger
 from app.models import AppSshKey, Server
 from app.services.key_provider import KeyProvider
+from app.services.sshd_config import (
+    SshdDirectiveResult,
+    apply_sshd_directive,
+)
 
 
-# Connection pool. Maps (user_id, server_id) -> (connection, last_used_at).
+# Connection pool. Maps (user_id, server_id) -> (connection, last_used_at, username).
+# The username is recorded so a pooled connection whose login identity no longer
+# matches the server (for example after a hardening transaction that switched to a
+# sudo user was rolled back) is discarded rather than reused with the wrong identity.
 _connection_pool: dict[
-    tuple[UUID, UUID], tuple[asyncssh.SSHClientConnection, datetime]
+    tuple[UUID, UUID], tuple[asyncssh.SSHClientConnection, datetime, str]
 ] = {}
 
 
@@ -84,7 +91,7 @@ def _evict_if_stale(key: tuple[UUID, UUID]) -> None:
     entry = _connection_pool.get(key)
     if entry is None:
         return
-    conn, last_used_at = entry
+    conn, last_used_at, _username = entry
     idle_seconds = (_now() - last_used_at).total_seconds()
     if idle_seconds > get_settings().ssh_pool_idle_timeout_seconds:
         conn.close()
@@ -93,18 +100,19 @@ def _evict_if_stale(key: tuple[UUID, UUID]) -> None:
 
 def clear_pool() -> None:
     """Close and drop all pooled connections. Used on shutdown and in tests."""
-    for conn, _ in _connection_pool.values():
+    for conn, _last_used, _username in _connection_pool.values():
         conn.close()
     _connection_pool.clear()
 
 
-async def _run_checked(conn: asyncssh.SSHClientConnection, command: str) -> None:
+async def _run_checked(conn: asyncssh.SSHClientConnection, command: str):
     result = await conn.run(command, check=False)
     if result.exit_status not in (0, None):
         raise KeyInstallVerificationFailed(
             f"Command failed (exit {result.exit_status}): {command}\n"
             f"{(result.stderr or '').strip()}"
         )
+    return result
 
 
 class SSHService:
@@ -168,56 +176,31 @@ class SSHService:
             await _run_checked(conn, "chmod 600 ~/.ssh/authorized_keys")
 
             if disable_password_auth:
-                # Replace any existing (possibly commented) PasswordAuthentication
-                # yes|no line, then ensure the directive is present. The regex only
-                # matches yes|no values so directives like PasswordAuthenticationMethods
-                # are left untouched. -i.bak keeps a recovery copy at sshd_config.bak.
-                sed_cmd = (
-                    "sed -ri.bak "
-                    "'s/^[#[:space:]]*PasswordAuthentication[[:space:]]+(yes|no)"
-                    "[[:space:]]*.*$/PasswordAuthentication no/' /etc/ssh/sshd_config"
-                )
-                ensure_cmd = (
-                    "grep -qE '^PasswordAuthentication no' /etc/ssh/sshd_config || "
-                    "echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config"
-                )
-                await _run_checked(conn, sed_cmd)
-                await _run_checked(conn, ensure_cmd)
+                # Disable password auth idempotently and confirm the running daemon
+                # reports it, via the shared sshd_config helper. _run_checked raises
+                # KeyInstallVerificationFailed if any edit or reload command fails; a
+                # runtime mismatch surfaces as SshHardeningFailed below.
+                async def run(script: str):
+                    return await _run_checked(conn, script)
 
-                # Reload sshd. Try the common service names in order. The final
-                # branch exits non zero with a clear marker so _run_checked raises
-                # instead of surfacing a misleading "command not found".
-                reload_cmd = (
-                    "systemctl reload sshd 2>/dev/null || "
-                    "systemctl reload ssh 2>/dev/null || "
-                    "service ssh reload 2>/dev/null || "
-                    "service sshd reload 2>/dev/null || "
-                    "(echo 'no_reload_method_succeeded' >&2; exit 1)"
+                result = await apply_sshd_directive(
+                    run,
+                    directive="PasswordAuthentication",
+                    value="no",
+                    value_alternatives="yes|no",
                 )
-                await _run_checked(conn, reload_cmd)
-
-                # The file edit and reload can both report success while the running
-                # daemon still accepts passwords. Read the effective runtime config
-                # via sshd -T and fail loudly if it disagrees.
-                verify_cmd = (
-                    "sshd -T 2>/dev/null | grep -i '^passwordauthentication' || "
-                    "echo 'sshd_t_unavailable'"
-                )
-                result = await conn.run(verify_cmd, check=False)
-                output = (result.stdout or "").strip().lower()
-                if output == "sshd_t_unavailable":
+                if result is SshdDirectiveResult.UNAVAILABLE:
                     # sshd -T not supported here. The file edit succeeded but we
                     # cannot confirm runtime state, so warn rather than fail.
                     logger.warning(
                         "Could not verify sshd runtime config (sshd -T unavailable). "
                         "File edit succeeded but runtime state unconfirmed."
                     )
-                elif "passwordauthentication no" not in output:
+                elif result is SshdDirectiveResult.MISMATCH:
                     raise SshHardeningFailed(
                         "Edited sshd_config and reloaded sshd, but sshd is still "
-                        "reporting password authentication as enabled. sshd -T "
-                        f"output: {result.stdout!r}. Manual intervention required "
-                        "on the server."
+                        "reporting password authentication as enabled. Manual "
+                        "intervention required on the server."
                     )
 
         # Fresh key authenticated connection to prove the install worked.
@@ -256,9 +239,14 @@ class SSHService:
         _evict_if_stale(pool_key)
         entry = _connection_pool.get(pool_key)
         if entry is not None:
-            conn, _ = entry
-            _connection_pool[pool_key] = (conn, _now())
-            return conn
+            conn, _last_used, pooled_username = entry
+            if pooled_username == server.username:
+                _connection_pool[pool_key] = (conn, _now(), pooled_username)
+                return conn
+            # Identity changed since this connection was pooled. Drop it and open a
+            # fresh one as the current user.
+            conn.close()
+            _connection_pool.pop(pool_key, None)
 
         key_bytes = await self._load_private_key(
             user_id, session_id, redis, db, key_provider
@@ -281,8 +269,52 @@ class SSHService:
                 "verified key on record."
             ) from exc
 
-        _connection_pool[pool_key] = (conn, _now())
+        _connection_pool[pool_key] = (conn, _now(), server.username)
         return conn
+
+    def evict_connection(self, user_id: UUID, server_id: UUID) -> None:
+        """Close and drop a pooled connection. No-op if none is present.
+
+        Used after operations that change how we authenticate to a server (for
+        example switching from root to a sudo user) so the next get_connection opens
+        a fresh session reflecting the new identity.
+        """
+        entry = _connection_pool.pop((user_id, server_id), None)
+        if entry is not None:
+            conn, _last_used, _username = entry
+            conn.close()
+
+    async def ping(
+        self,
+        server: Server,
+        user_id: UUID,
+        session_id: str,
+        redis: aioredis.Redis,
+        db: AsyncSession,
+        key_provider: KeyProvider,
+    ) -> bool:
+        """Open a fresh (never pooled) connection and run a trivial command.
+
+        Used to poll a server after a reboot. Deliberately bypasses the pool because
+        a pooled entry can be stale (pointing at a connection the box dropped while
+        rebooting). Returns True only if a brand new connection succeeds.
+        """
+        try:
+            key_bytes = await self._load_private_key(
+                user_id, session_id, redis, db, key_provider
+            )
+            known_hosts = _known_hosts_for(server)
+            async with asyncssh.connect(
+                host=server.host,
+                port=server.port,
+                username=server.username,
+                client_keys=[asyncssh.import_private_key(key_bytes)],
+                known_hosts=known_hosts,
+            ) as conn:
+                result = await conn.run("echo ok", check=False)
+                return (result.stdout or "").strip() == "ok"
+        except (OSError, asyncssh.Error):
+            return False
 
     async def run_command(
         self,

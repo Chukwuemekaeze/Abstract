@@ -39,3 +39,26 @@ export function extractErrorMessage(error: unknown, fallback = 'Something went w
   if (error instanceof Error) return error.message
   return fallback
 }
+
+// Pull a hardening failure out of an axios error. Hardening endpoints return a
+// structured detail object { message, captured_output } on a 502 so the UI can show
+// the raw shell output in a collapsible panel. Falls back to extractErrorMessage for
+// plain string details (guardrail 400s, 409s) and non-axios errors.
+export function extractHardeningError(
+  error: unknown,
+  fallback = 'Operation failed',
+): { message: string; output: string | null } {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+    if (detail && typeof detail === 'object') {
+      return {
+        message: typeof detail.message === 'string' ? detail.message : fallback,
+        output:
+          typeof detail.captured_output === 'string'
+            ? detail.captured_output
+            : null,
+      }
+    }
+  }
+  return { message: extractErrorMessage(error, fallback), output: null }
+}
