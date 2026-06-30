@@ -35,21 +35,29 @@ class SshdDirectiveResult(enum.Enum):
     MISMATCH = "mismatch"  # runtime config disagrees with the intended value
 
 
-def _sed_script(directive: str, value: str, value_alternatives: str) -> str:
-    # Replace any existing (possibly commented) directive line whose value is one of
-    # value_alternatives. -i.bak keeps a recovery copy at sshd_config.bak.
+def _edit_script(directive: str, value: str, value_alternatives: str) -> str:
+    """Build the idempotent edit that makes `directive value` the effective setting.
+
+    Two parts:
+      1. Normalize the directive in the main /etc/ssh/sshd_config (replace any
+         existing, possibly commented, line then ensure it is present). -i.bak keeps a
+         recovery copy. This is what governs on systems without config drop-ins.
+      2. On systems whose main config Includes /etc/ssh/sshd_config.d/*.conf (cloud
+         images like DigitalOcean and Ubuntu ship a 50-cloud-init.conf that sets
+         PasswordAuthentication yes), the Include is read before the main body and
+         sshd uses the FIRST value it sees, so our main-file edit is ignored. Write a
+         drop-in that sorts first (00-abstract-...) so our value wins.
+    """
     target = f"{directive} {value}"
+    dropin = f"/etc/ssh/sshd_config.d/00-abstract-{directive}.conf"
     return (
         f"sed -ri.bak 's/^[#[:space:]]*{directive}[[:space:]]+"
-        f"({value_alternatives})[[:space:]]*.*$/{target}/' /etc/ssh/sshd_config"
-    )
-
-
-def _ensure_script(directive: str, value: str) -> str:
-    target = f"{directive} {value}"
-    return (
-        f"grep -qE '^{directive} {value}' /etc/ssh/sshd_config || "
-        f"echo '{target}' >> /etc/ssh/sshd_config"
+        f"({value_alternatives})[[:space:]]*.*$/{target}/' /etc/ssh/sshd_config && "
+        f"(grep -qE '^{directive} {value}' /etc/ssh/sshd_config || "
+        f"echo '{target}' >> /etc/ssh/sshd_config) && "
+        f"if grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\\.d/' "
+        f"/etc/ssh/sshd_config; then mkdir -p /etc/ssh/sshd_config.d && "
+        f"printf '%s\\n' '{target}' > {dropin}; fi"
     )
 
 
@@ -75,8 +83,7 @@ async def apply_sshd_directive(
     and reload can both succeed while the daemon still reports the old value, so the
     runtime check via `sshd -T` is what we trust.
     """
-    await run(_sed_script(directive, value, value_alternatives))
-    await run(_ensure_script(directive, value))
+    await run(_edit_script(directive, value, value_alternatives))
     await run(RELOAD_SSHD)
     result = await run(_verify_script(directive))
     output = (result.stdout or "").strip().lower()
