@@ -236,3 +236,32 @@ async def smoke_test(
         stderr=result.stderr,
         exit_status=result.exit_status,
     )
+
+
+@router.post("/{server_id}/ping")
+async def ping_server(
+    server: Server = Depends(get_owned_server),
+    current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+    ssh: SSHService = Depends(get_ssh_service),
+    key_provider: KeyProvider = Depends(get_key_provider_dep),
+) -> dict[str, str]:
+    """Check whether the server is reachable over SSH right now.
+
+    Forces a fresh connection (never the pool) so a stale pooled entry cannot mask a
+    box that is down, for example while it reboots. Returns 200 when reachable, 503
+    otherwise. The frontend polls this after a reboot.
+    """
+    reachable = await ssh.ping(
+        server=server,
+        user_id=current_user.id,
+        session_id=session_id,
+        redis=redis,
+        db=db,
+        key_provider=key_provider,
+    )
+    if not reachable:
+        raise HTTPException(503, "Server is not reachable.")
+    return {"status": "ok"}

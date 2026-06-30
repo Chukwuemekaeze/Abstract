@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.logging_config import setup_logging
-from app.routes import servers
+from app.routes import hardening, servers
 from app.services.ssh_service import clear_pool
 
 # Configure logging before anything starts emitting records.
@@ -36,6 +36,7 @@ app.add_middleware(
 )
 
 app.include_router(servers.router)
+app.include_router(hardening.router)
 
 
 @app.get("/api/health")
