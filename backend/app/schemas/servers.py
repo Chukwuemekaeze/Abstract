@@ -63,6 +63,7 @@ class ServerResponse(BaseModel):
     firewall_enabled: bool
     docker_installed: bool
     base_packages_installed: bool
+    nginx_installed: bool
     swap_configured: bool
     last_system_update_at: datetime | None
 

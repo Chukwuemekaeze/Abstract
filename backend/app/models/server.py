@@ -87,6 +87,9 @@ class Server(Base):
     base_packages_installed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    nginx_installed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     swap_configured: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
