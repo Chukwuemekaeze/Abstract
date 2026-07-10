@@ -16,6 +16,7 @@ from app.services.hardening_service import (
     FirewallConfigFailed,
     HardeningContext,
     HardeningService,
+    NginxInstallFailed,
     PasswordAuthDisableFailed,
     RootLoginDisableFailed,
     RootLoginPrecheckFailed,
@@ -49,6 +50,10 @@ class FakeConn:
             return FakeProc(stdout="exists\n" if self.user_exists else "absent\n")
         if "docker --version" in command:
             return FakeProc(stdout="Docker version 24.0.0\n")
+        if "is-active nginx" in command:
+            return FakeProc(stdout="active\n")
+        if "is-enabled nginx" in command:
+            return FakeProc(stdout="enabled\n")
         if "permitrootlogin" in command:
             return FakeProc(stdout="permitrootlogin no\n")
         if "passwordauthentication" in command:
@@ -107,6 +112,7 @@ class FakeServer:
         self.last_system_update_at = None
         self.password_auth_disabled = False
         self.base_packages_installed = False
+        self.nginx_installed = False
 
 
 def _ctx(mocker):
@@ -199,6 +205,93 @@ async def test_install_docker_failure_no_state(mocker):
     with pytest.raises(DockerInstallFailed):
         await service.install_docker(conn, server, mocker.MagicMock())
     assert server.docker_installed is False
+
+
+# -- install_nginx -----------------------------------------------------------
+
+
+class EnabledSequenceConn(FakeConn):
+    """FakeConn whose successive `is-enabled nginx` probes pop from a list."""
+
+    def __init__(self, enabled_responses, **kwargs):
+        super().__init__(**kwargs)
+        self.enabled_responses = list(enabled_responses)
+
+    async def run(self, command, check=False, timeout=None):
+        if "is-enabled nginx" in command:
+            self.commands.append(command)
+            return FakeProc(stdout=self.enabled_responses.pop(0))
+        return await super().run(command, check=check, timeout=timeout)
+
+
+async def test_install_nginx_happy_sets_flag_and_never_commits(mocker):
+    service, _ = _service(mocker)
+    conn = FakeConn()
+    server = FakeServer()
+    db = mocker.MagicMock()
+    await service.install_nginx(conn, server, db)
+    joined = "\n".join(conn.commands)
+    apt = joined.index("apt-get install -y nginx python3-certbot-nginx")
+    active = joined.index("systemctl is-active nginx")
+    enabled = joined.index("systemctl is-enabled nginx")
+    assert apt < active < enabled
+    assert server.nginx_installed is True
+    db.commit.assert_not_called()
+
+
+async def test_install_nginx_idempotent_rerun(mocker):
+    service, _ = _service(mocker)
+    conn = FakeConn()
+    server = FakeServer()
+    await service.install_nginx(conn, server, mocker.MagicMock())
+    assert server.nginx_installed is True
+    await service.install_nginx(conn, server, mocker.MagicMock())
+    assert server.nginx_installed is True
+
+
+async def test_install_nginx_apt_failure_no_state(mocker):
+    service, _ = _service(mocker)
+    conn = FakeConn(fail_on="apt-get install")
+    server = FakeServer()
+    with pytest.raises(NginxInstallFailed) as excinfo:
+        await service.install_nginx(conn, server, mocker.MagicMock())
+    assert "boom" in excinfo.value.captured_output
+    assert server.nginx_installed is False
+
+
+async def test_install_nginx_inactive_after_install_fails(mocker):
+    service, _ = _service(mocker)
+
+    class InactiveConn(FakeConn):
+        async def run(self, command, check=False, timeout=None):
+            if "is-active nginx" in command:
+                self.commands.append(command)
+                return FakeProc(stdout="inactive\n")
+            return await super().run(command, check=check, timeout=timeout)
+
+    conn = InactiveConn()
+    server = FakeServer()
+    with pytest.raises(NginxInstallFailed):
+        await service.install_nginx(conn, server, mocker.MagicMock())
+    assert server.nginx_installed is False
+
+
+async def test_install_nginx_enable_recovery(mocker):
+    service, _ = _service(mocker)
+    conn = EnabledSequenceConn(["disabled\n", "enabled\n"])
+    server = FakeServer()
+    await service.install_nginx(conn, server, mocker.MagicMock())
+    assert "systemctl enable nginx" in "\n".join(conn.commands)
+    assert server.nginx_installed is True
+
+
+async def test_install_nginx_enable_unrecoverable_fails(mocker):
+    service, _ = _service(mocker)
+    conn = EnabledSequenceConn(["disabled\n", "disabled\n"])
+    server = FakeServer()
+    with pytest.raises(NginxInstallFailed):
+        await service.install_nginx(conn, server, mocker.MagicMock())
+    assert server.nginx_installed is False
 
 
 # -- create_sudo_user ------------------------------------------------------
@@ -403,6 +496,13 @@ async def test_quick_harden_runs_full_sequence(mocker):
     assert server.last_system_update_at is not None
     assert server.base_packages_installed is True
     assert server.docker_installed is True
+    assert server.nginx_installed is True
+    # install_nginx runs after install_docker and before create_sudo_user.
+    joined = "\n".join(conn.commands)
+    docker_idx = joined.index("get.docker.com")
+    nginx_idx = joined.index("apt-get install -y nginx")
+    adduser_idx = joined.index("adduser --disabled-password")
+    assert docker_idx < nginx_idx < adduser_idx
     assert server.sudo_user_name == "deploy"
     assert server.username == "deploy"
     assert server.firewall_enabled is True

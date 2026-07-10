@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.deps.services import get_hardening_service, get_ssh_service
 from app.main import app
 from app.models import AppSshKey, Server
-from app.services.hardening_service import HardeningError
+from app.services.hardening_service import HardeningError, NginxInstallFailed
 from app.services.key_provider import get_key_provider
 from tests.conftest import requires_db
 
@@ -33,6 +33,7 @@ def harden_env(mocker):
         "update_system",
         "install_base_packages",
         "install_docker",
+        "install_nginx",
         "create_sudo_user",
         "disable_root_login",
         "configure_firewall",
@@ -120,6 +121,67 @@ async def test_update_system_happy(client, harden_env, db_session, test_user):
     hardening.update_system.assert_awaited_once()
 
 
+async def test_install_nginx_no_auth_returns_401(unauthenticated_client):
+    ac, _clerk = unauthenticated_client
+    resp = await ac.post(f"/api/servers/{uuid4()}/harden/install_nginx")
+    assert resp.status_code == 401
+
+
+async def test_install_nginx_other_users_server_returns_404(
+    client, harden_env, db_session, test_user, other_test_user
+):
+    foreign = await _make_server(db_session, other_test_user.id)
+    resp = await client.post(f"/api/servers/{foreign.id}/harden/install_nginx")
+    assert resp.status_code == 404
+
+
+async def test_install_nginx_rejected_when_not_verified(
+    client, harden_env, db_session, test_user
+):
+    pending = await _make_server(db_session, test_user.id, status="pending_verification")
+    resp = await client.post(f"/api/servers/{pending.id}/harden/install_nginx")
+    assert resp.status_code == 400
+
+
+async def test_install_nginx_happy(client, harden_env, db_session, test_user):
+    _ssh, hardening = harden_env
+    server = await _make_server(db_session, test_user.id)
+
+    async def fake_install_nginx(conn, srv, db):
+        srv.nginx_installed = True
+
+    hardening.install_nginx.side_effect = fake_install_nginx
+
+    resp = await client.post(f"/api/servers/{server.id}/harden/install_nginx")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["nginx_installed"] is True
+    hardening.install_nginx.assert_awaited_once()
+
+
+async def test_install_nginx_failure_returns_output_and_rolls_back(
+    client, harden_env, db_session, test_user
+):
+    _ssh, hardening = harden_env
+    server = await _make_server(db_session, test_user.id)
+    server_id = server.id
+
+    async def failing_install_nginx(conn, srv, db):
+        srv.nginx_installed = True
+        raise NginxInstallFailed("$ systemctl is-active nginx\ninactive")
+
+    hardening.install_nginx.side_effect = failing_install_nginx
+
+    resp = await client.post(f"/api/servers/{server_id}/harden/install_nginx")
+    assert resp.status_code == 502, resp.text
+    detail = resp.json()["detail"]
+    assert detail["message"] == "Operation failed"
+    assert "inactive" in detail["captured_output"]
+
+    # Transaction rolled back: the flag never persisted.
+    row = await db_session.scalar(select(Server).where(Server.id == server_id))
+    assert row.nginx_installed is False
+
+
 async def test_quick_harden_happy_updates_all_fields(
     client, harden_env, db_session, test_user, app_key
 ):
@@ -129,6 +191,7 @@ async def test_quick_harden_happy_updates_all_fields(
     async def fake_quick_harden(srv, db, ctx, name):
         # Simulate the orchestrator mutating the row (the route commits it).
         srv.docker_installed = True
+        srv.nginx_installed = True
         srv.sudo_user_name = name
         srv.username = name
         srv.firewall_enabled = True
@@ -144,6 +207,7 @@ async def test_quick_harden_happy_updates_all_fields(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["docker_installed"] is True
+    assert body["nginx_installed"] is True
     assert body["sudo_user_name"] == "deploy"
     assert body["firewall_enabled"] is True
     assert body["swap_configured"] is True
