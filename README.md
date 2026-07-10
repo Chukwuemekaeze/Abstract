@@ -155,6 +155,9 @@ Available operations:
 - **Update system**: `apt-get update` and `upgrade` (noninteractive).
 - **Install base packages**: git, certbot, ufw, curl, ca-certificates.
 - **Install Docker**: the official `get.docker.com` installer.
+- **Install nginx**: installs nginx and its Let's Encrypt integration
+  (`python3-certbot-nginx`). Nginx runs as a system service and will be used to
+  route HTTPS traffic to projects in a future feature.
 - **Create sudo user**: a non-root user with passwordless sudo and the app deploy
   key. This is the point where Abstract switches from operating as root to operating
   as the sudo user.
@@ -169,7 +172,8 @@ Available operations:
 - **Reboot**: reboots the box and polls until it comes back online.
 
 **Quick harden** runs the standard sequence in order (update, base packages, Docker,
-sudo user, firewall, swap, disable password authentication, disable root login).
+nginx, sudo user, firewall, swap, disable password authentication, disable root
+login).
 Reboot is intentionally excluded so the connection is not dropped mid-sequence.
 
 Quick harden and each individual operation are **atomic at the database level**: the
