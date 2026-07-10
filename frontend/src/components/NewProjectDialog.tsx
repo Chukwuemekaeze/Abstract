@@ -10,7 +10,7 @@ import { Link } from 'react-router-dom'
 import { Check, ChevronsUpDown, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { extractErrorMessage } from '@/api/client'
+import { extractErrorMessage, extractHardeningError } from '@/api/client'
 import { useCreateProjectMutation, useGithubRepos } from '@/api/projects'
 import { useServers } from '@/api/servers'
 import { Button } from '@/components/ui/button'
@@ -53,6 +53,7 @@ export function NewProjectDialog() {
     formData,
     initialServerId,
     error,
+    errorOutput,
     close,
     setFormData,
     setStep,
@@ -100,7 +101,13 @@ export function NewProjectDialog() {
       setStep('done')
       toast.success('Project created')
     } catch (err) {
-      setError(extractErrorMessage(err, 'Project creation failed.'))
+      // Clone failures return a structured detail { message, captured_output }
+      // like the hardening endpoints; plain string details fall through.
+      const { message, output } = extractHardeningError(
+        err,
+        'Project creation failed.',
+      )
+      setError(message, output)
       setStep('failed')
     }
   }
@@ -287,6 +294,11 @@ export function NewProjectDialog() {
         {step === 'failed' && (
           <div className="flex flex-col gap-4 py-4">
             <p className="text-destructive text-sm">{error}</p>
+            {errorOutput && (
+              <pre className="max-h-48 overflow-auto rounded-md bg-muted p-3 text-xs">
+                <code>{errorOutput}</code>
+              </pre>
+            )}
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={close}>
                 Close

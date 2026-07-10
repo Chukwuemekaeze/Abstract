@@ -35,13 +35,16 @@ interface NewProjectState {
   // select is disabled.
   initialServerId: string | null
   error: string | null
+  // Raw shell output captured by the backend on clone failures (502 detail),
+  // shown in a collapsible block like the hardening cards do.
+  errorOutput: string | null
 
   open: (opts?: { initialServerId?: string }) => void
   close: () => void
 
   setFormData: (patch: Partial<NewProjectFormData>) => void
   setStep: (step: NewProjectStep) => void
-  setError: (error: string | null) => void
+  setError: (error: string | null, output?: string | null) => void
 }
 
 export const useNewProjectStore = create<NewProjectState>((set) => ({
@@ -49,11 +52,13 @@ export const useNewProjectStore = create<NewProjectState>((set) => ({
   formData: initialFormData,
   initialServerId: null,
   error: null,
+  errorOutput: null,
 
   open: (opts) =>
     set({
       step: 'form',
       error: null,
+      errorOutput: null,
       initialServerId: opts?.initialServerId ?? null,
       formData: {
         ...initialFormData,
@@ -67,10 +72,11 @@ export const useNewProjectStore = create<NewProjectState>((set) => ({
       formData: initialFormData,
       initialServerId: null,
       error: null,
+      errorOutput: null,
     }),
 
   setFormData: (patch) =>
     set((state) => ({ formData: { ...state.formData, ...patch } })),
   setStep: (step) => set({ step }),
-  setError: (error) => set({ error }),
+  setError: (error, output = null) => set({ error, errorOutput: output }),
 }))
