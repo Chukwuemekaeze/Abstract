@@ -147,6 +147,27 @@ async def test_add_deploy_key_error_carries_status_and_body(github_with):
     assert "already in use" in exc_info.value.body
 
 
+async def test_get_ssh_host_keys_returns_published_keys(github_with):
+    service, install = github_with
+    install(
+        [
+            _response(
+                200,
+                {
+                    "ssh_keys": [
+                        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+                        "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAI...",
+                    ],
+                    "verifiable_password_authentication": False,
+                },
+            )
+        ]
+    )
+    keys = await service.get_ssh_host_keys(TOKEN)
+    assert len(keys) == 2
+    assert keys[0].startswith("ssh-ed25519 ")
+
+
 async def test_delete_deploy_key_treats_404_as_success(github_with):
     service, install = github_with
     install([_response(404, {"message": "Not Found"})])

@@ -115,6 +115,22 @@ class GithubService:
             raise GithubApiError(response.status_code, response.text)
         return response.json()["id"]
 
+    async def get_ssh_host_keys(self, token: str) -> list[str]:
+        """GitHub's published SSH host keys, e.g. 'ssh-ed25519 AAAA...'.
+
+        Fetched from the /meta endpoint over TLS, so trust is anchored in the
+        certificate chain rather than in whatever a network path answers to an
+        ssh-keyscan. Used to seed known_hosts on the VPS before the first clone.
+        """
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.get(
+                f"{_BASE_URL}/meta", headers=_headers(token)
+            )
+        _check_rate_limit(response)
+        if response.status_code != 200:
+            raise GithubApiError(response.status_code, response.text)
+        return response.json().get("ssh_keys") or []
+
     async def delete_deploy_key(
         self, token: str, repo_full_name: str, github_deploy_key_id: int
     ) -> None:

@@ -83,6 +83,9 @@ def make_github(mocker, deploy_key_id: int = 4242):
     github.add_deploy_key = mocker.AsyncMock(return_value=deploy_key_id)
     github.delete_deploy_key = mocker.AsyncMock(return_value=None)
     github.list_admin_repos = mocker.AsyncMock(return_value=[])
+    github.get_ssh_host_keys = mocker.AsyncMock(
+        return_value=["ssh-ed25519 AAAAghtestkey"]
+    )
     return github
 
 

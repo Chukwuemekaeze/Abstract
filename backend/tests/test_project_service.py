@@ -127,6 +127,11 @@ async def test_happy_path(db_session, test_user, mocker):
 
     commands = ran_commands(conn)
     assert any("Host github-anibants" in c for c in commands)
+    # GitHub's pinned host key is seeded into known_hosts before the clone.
+    assert any(
+        "known_hosts" in c and "github.com ssh-ed25519 AAAAghtestkey" in c
+        for c in commands
+    )
     assert any(
         "git clone" in c and "git@github-anibants:" in c for c in commands
     )
@@ -223,6 +228,8 @@ async def test_full_cleanup_when_clone_fails(db_session, test_user, mocker):
     assert any("rm -f ~/.ssh/anibants-deploy" in c for c in commands)
     assert any("awk" in c and "Host github-anibants" in c for c in commands)
     assert any("rm -rf" in c and "anibantsdotNG" in c for c in commands)
+    # known_hosts entries are shared across projects and never cleaned up.
+    assert not any("known_hosts" in c and "rm " in c for c in commands)
 
 
 async def test_cleanup_failures_never_mask_original_error(

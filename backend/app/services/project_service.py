@@ -183,6 +183,11 @@ async def create_project(
     # -- 2. GitHub OAuth token (fetched fresh, never cached) -----------------
     token = await get_github_oauth_token(clerk, current_user.clerk_user_id)
 
+    # GitHub's published host keys, fetched now so a GitHub outage fails the
+    # request before any external state exists. Needed on the VPS before the
+    # clone: a non-interactive ssh refuses unknown hosts.
+    github_host_keys = await github.get_ssh_host_keys(token)
+
     # -- 3. Deploy keypair ----------------------------------------------------
     private_key_bytes, public_key_text, fingerprint = generate_deploy_keypair()
     encrypted_private_key = await key_provider.encrypt(private_key_bytes)
@@ -248,6 +253,19 @@ async def create_project(
         )
         state.config_block_written = True
         await _run(conn, "chmod 600 ~/.ssh/config")
+
+        # -- 8b. Trust GitHub's host keys before the first clone ---------------
+        # Pinned from the /meta API (see get_ssh_host_keys), appended
+        # idempotently. Deliberately not undone on cleanup: the entries are
+        # shared by every project on the box and harmless on their own.
+        await _run(conn, "touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts")
+        for host_key in github_host_keys:
+            line = shlex.quote(f"github.com {host_key}")
+            await _run(
+                conn,
+                f"grep -qF {line} ~/.ssh/known_hosts || "
+                f"printf '%s\\n' {line} >> ~/.ssh/known_hosts",
+            )
 
         # -- 9. Clone ----------------------------------------------------------
         state.clone_started = True
