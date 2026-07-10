@@ -74,8 +74,8 @@ export function QuickHardenSection({
         <div>
           <h2 className="text-lg font-semibold">Quick harden</h2>
           <p className="text-sm text-muted-foreground">
-            Run the standard sequence: update, base packages, Docker, sudo user,
-            firewall, swap, and disable root login.
+            Run the standard sequence: update, base packages, Docker, nginx,
+            sudo user, firewall, swap, and disable root login.
           </p>
         </div>
         <Button onClick={onQuickHardenClick} disabled={disabled || running}>

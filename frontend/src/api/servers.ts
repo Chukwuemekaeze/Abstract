@@ -33,6 +33,7 @@ export interface Server {
   firewall_enabled: boolean
   docker_installed: boolean
   base_packages_installed: boolean
+  nginx_installed: boolean
   swap_configured: boolean
   last_system_update_at: string | null
 }
@@ -192,6 +193,7 @@ export const useUpdateSystemMutation = () => useHardeningMutation('update_system
 export const useInstallBasePackagesMutation = () =>
   useHardeningMutation('install_base_packages')
 export const useInstallDockerMutation = () => useHardeningMutation('install_docker')
+export const useInstallNginxMutation = () => useHardeningMutation('install_nginx')
 export const useCreateSudoUserMutation = () =>
   useHardeningMutation<SudoUserBody>('create_sudo_user')
 export const useDisableRootLoginMutation = () =>

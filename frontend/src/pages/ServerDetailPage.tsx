@@ -21,6 +21,7 @@ import {
   useDisableRootLoginMutation,
   useInstallBasePackagesMutation,
   useInstallDockerMutation,
+  useInstallNginxMutation,
   useRebootMutation,
   useServer,
   useServerPing,
@@ -94,6 +95,7 @@ function ServerDetail({ server }: { server: Server }) {
   const updateSystem = useUpdateSystemMutation()
   const installBase = useInstallBasePackagesMutation()
   const installDocker = useInstallDockerMutation()
+  const installNginx = useInstallNginxMutation()
   const createSudoUser = useCreateSudoUserMutation()
   const disableRoot = useDisableRootLoginMutation()
   const disablePasswordAuth = useDisablePasswordAuthMutation()
@@ -137,6 +139,7 @@ function ServerDetail({ server }: { server: Server }) {
     updateSystem.isPending ||
     installBase.isPending ||
     installDocker.isPending ||
+    installNginx.isPending ||
     createSudoUser.isPending ||
     disableRoot.isPending ||
     disablePasswordAuth.isPending ||
@@ -284,6 +287,23 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['install_docker'])}
           output={errors['install_docker'] ?? null}
+          disabled={anyRunning || lockedForReboot}
+          disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
+        />
+
+        <OperationCard
+          title="Install nginx"
+          description="Install nginx and its Let's Encrypt integration. Required before publishing projects to a domain."
+          status={deriveStatus(
+            'install_nginx',
+            installNginx.isPending,
+            server.nginx_installed,
+          )}
+          statusLabel={server.nginx_installed ? 'Installed' : 'Not installed'}
+          onRun={runner('install_nginx', 'Install nginx', installNginx.mutateAsync)}
+          runLabel={server.nginx_installed ? 'Run again' : 'Run'}
+          isRetry={Boolean(errors['install_nginx'])}
+          output={errors['install_nginx'] ?? null}
           disabled={anyRunning || lockedForReboot}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
