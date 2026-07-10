@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv",
     "clerk-backend-api>=6.0,<7",
     "loguru>=0.7,<1",
+    "httpx",
 ]
 
 [project.optional-dependencies]

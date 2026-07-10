@@ -3,6 +3,7 @@
 from fastapi import Depends
 
 from app.config import Settings, get_settings
+from app.services.github_service import GithubService, github_service
 from app.services.hardening_service import HardeningService, hardening_service
 from app.services.key_provider import KeyProvider, get_key_provider
 from app.services.ssh_service import SSHService, ssh_service
@@ -14,6 +15,10 @@ def get_ssh_service() -> SSHService:
 
 def get_hardening_service() -> HardeningService:
     return hardening_service
+
+
+def get_github_service() -> GithubService:
+    return github_service
 
 
 def get_key_provider_dep(
