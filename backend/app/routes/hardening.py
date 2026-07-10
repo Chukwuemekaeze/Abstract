@@ -176,6 +176,26 @@ async def install_docker(
     return ServerResponse.model_validate(server)
 
 
+@router.post("/install_nginx", response_model=ServerResponse)
+async def install_nginx(
+    server: Server = Depends(get_owned_server),
+    current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+    ssh: SSHService = Depends(get_ssh_service),
+    key_provider: KeyProvider = Depends(get_key_provider_dep),
+    hardening: HardeningService = Depends(get_hardening_service),
+) -> ServerResponse:
+    _require_verified(server)
+    async with _atomic(db, server):
+        conn = await ssh.get_connection(
+            server, current_user.id, session_id, redis, db, key_provider
+        )
+        await hardening.install_nginx(conn, server, db)
+    return ServerResponse.model_validate(server)
+
+
 @router.post("/create_sudo_user", response_model=ServerResponse)
 async def create_sudo_user(
     body: CreateSudoUserRequest,

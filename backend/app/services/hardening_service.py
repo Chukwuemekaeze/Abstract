@@ -41,7 +41,7 @@ from app.services.sshd_config import (
 # Command timeouts in seconds. apt and the Docker installer are slow, the rest are
 # quick. These are fixed, not user configurable.
 TIMEOUT_LONG = 600  # update_system, install_docker
-TIMEOUT_MED = 300  # install_base_packages
+TIMEOUT_MED = 300  # install_base_packages, install_nginx
 TIMEOUT_SHORT = 120  # everything else
 
 # Swap is sized at 25% of the box's RAM, with a floor so tiny instances still get a
@@ -62,6 +62,10 @@ class SystemUpdateFailed(HardeningError):
 
 
 class DockerInstallFailed(HardeningError):
+    pass
+
+
+class NginxInstallFailed(HardeningError):
     pass
 
 
@@ -285,6 +289,68 @@ class HardeningService:
             captured=captured,
         )
         server.docker_installed = True
+
+    async def install_nginx(
+        self, conn: asyncssh.SSHClientConnection, server: Server, db: AsyncSession
+    ) -> None:
+        """Install nginx plus the certbot nginx plugin and ensure it runs at boot.
+
+        python3-certbot-nginx lets certbot manage nginx configs and TLS certs when
+        projects are published to a domain later. The systemctl probes append
+        `|| true` because is-active/is-enabled exit nonzero for negative states,
+        which _run would otherwise treat as a command failure before we can check
+        the reported state.
+        """
+        captured: list[str] = []
+        # apt-get install is a no-op for already installed packages, so idempotent.
+        await self._run(
+            conn,
+            server,
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "nginx python3-certbot-nginx",
+            timeout=TIMEOUT_MED,
+            error_cls=NginxInstallFailed,
+            captured=captured,
+        )
+        active = await self._run(
+            conn,
+            server,
+            "systemctl is-active nginx || true",
+            timeout=TIMEOUT_SHORT,
+            error_cls=NginxInstallFailed,
+            captured=captured,
+        )
+        if (active.stdout or "").strip() != "active":
+            raise NginxInstallFailed("\n".join(captured))
+
+        enabled = await self._run(
+            conn,
+            server,
+            "systemctl is-enabled nginx || true",
+            timeout=TIMEOUT_SHORT,
+            error_cls=NginxInstallFailed,
+            captured=captured,
+        )
+        if (enabled.stdout or "").strip() != "enabled":
+            await self._run(
+                conn,
+                server,
+                "systemctl enable nginx",
+                timeout=TIMEOUT_SHORT,
+                error_cls=NginxInstallFailed,
+                captured=captured,
+            )
+            enabled = await self._run(
+                conn,
+                server,
+                "systemctl is-enabled nginx || true",
+                timeout=TIMEOUT_SHORT,
+                error_cls=NginxInstallFailed,
+                captured=captured,
+            )
+            if (enabled.stdout or "").strip() != "enabled":
+                raise NginxInstallFailed("\n".join(captured))
+        server.nginx_installed = True
 
     async def create_sudo_user(
         self,
@@ -564,6 +630,7 @@ class HardeningService:
         await self.update_system(conn, server, db)
         await self.install_base_packages(conn, server, db)
         await self.install_docker(conn, server, db)
+        await self.install_nginx(conn, server, db)
         await self.create_sudo_user(conn, server, db, ctx, sudo_user_name_from_client)
 
         # create_sudo_user evicted the root connection. Reconnect as the sudo user.
