@@ -9,6 +9,7 @@ import { Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Toaster } from '@/components/ui/sonner'
 import { setTokenGetter } from '@/lib/auth-token'
+import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ServerDetailPage } from '@/pages/ServerDetailPage'
 import { ServersPage } from '@/pages/ServersPage'
 import { SignInPage } from '@/pages/SignInPage'
@@ -40,6 +41,14 @@ function App() {
           element={
             <ProtectedRoute>
               <ServerDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects"
+          element={
+            <ProtectedRoute>
+              <ProjectsPage />
             </ProtectedRoute>
           }
         />

@@ -26,7 +26,10 @@ import {
   useServerPing,
   useUpdateSystemMutation,
 } from '@/api/servers'
+import { useProjectsByServer } from '@/api/projects'
 import { Header } from '@/components/Header'
+import { NewProjectDialog } from '@/components/NewProjectDialog'
+import { ProjectCard } from '@/components/ProjectCard'
 import {
   OperationCard,
   type OperationStatus,
@@ -34,6 +37,8 @@ import {
 import { QuickHardenSection } from '@/components/hardening/QuickHardenSection'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { useNewProjectStore } from '@/store/newProjectStore'
 
 const STATUS_META: Record<ServerStatus, { label: string; className: string }> = {
   verified: { label: 'verified', className: 'bg-green-600 text-white' },
@@ -218,6 +223,8 @@ function ServerDetail({ server }: { server: Server }) {
       )}
 
       <QuickHardenSection server={server} disabled={anyRunning || lockedForReboot} />
+
+      <ProjectsSection server={server} />
 
       <div className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Operations</h2>
@@ -436,6 +443,63 @@ function ServerDetail({ server }: { server: Server }) {
           }
         />
       </div>
+    </div>
+  )
+}
+
+// Projects cloned onto this server. The New Project dialog opens with this
+// server preselected and the server field locked.
+function ProjectsSection({ server }: { server: Server }) {
+  const openNewProject = useNewProjectStore((s) => s.open)
+  const projects = useProjectsByServer(server.id)
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Projects</h2>
+        {projects.data && projects.data.length > 0 && (
+          <Button
+            size="sm"
+            onClick={() => openNewProject({ initialServerId: server.id })}
+          >
+            New Project
+          </Button>
+        )}
+      </div>
+
+      {projects.isLoading && (
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <Loader2 className="size-4 animate-spin" />
+          Loading projects...
+        </div>
+      )}
+      {projects.isError && (
+        <p className="text-destructive text-sm">Could not load projects.</p>
+      )}
+
+      {projects.data && projects.data.length === 0 && (
+        <div className="rounded-lg border border-dashed py-8 text-center">
+          <p className="text-muted-foreground mb-3 text-sm">
+            No projects on this server yet.
+          </p>
+          <Button
+            size="sm"
+            onClick={() => openNewProject({ initialServerId: server.id })}
+          >
+            New Project
+          </Button>
+        </div>
+      )}
+
+      {projects.data && projects.data.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {projects.data.map((project) => (
+            <ProjectCard key={project.id} project={project} />
+          ))}
+        </div>
+      )}
+
+      <NewProjectDialog />
     </div>
   )
 }
