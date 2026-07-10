@@ -179,6 +179,47 @@ recorded state for the server is unchanged. The VPS itself may be partially chan
 after a failure (we cannot undo `apt upgrade` or a Docker install), so every shell
 command is written to be idempotent, which makes retries safe and correct.
 
+## Projects
+
+A project is a GitHub repository cloned onto a verified, hardened server, with a
+per-project SSH deploy key managed by Abstract. Projects live at `/projects` (all
+projects across servers) and in a Projects section on each server's detail page.
+
+Preconditions: the server must be verified and hardened. Specifically it needs a
+sudo user and the base packages (git) installed; the create flow checks both the
+recorded state and the live box before doing anything.
+
+User flow: click **New Project** on the `/projects` page or on a server detail
+page, fill in a name, pick a server (preselected when opened from a server page),
+pick a repo, and click Create. The repo picker lists the repos your GitHub account
+has admin permission on, newest push first.
+
+What Abstract does on create:
+
+1. Generates a fresh ed25519 keypair for this project only.
+2. Registers the public key as a **read-only deploy key** on the repo, using your
+   GitHub OAuth token (via Clerk; the token is fetched fresh each time and never
+   stored).
+3. Writes the private key to `~/.ssh/{slug}-deploy` on the VPS (mode 600, sent
+   over SFTP).
+4. Adds a Host block to the sudo user's `~/.ssh/config` with a per-project alias
+   (`github-{slug}`), so each clone uses its own key.
+5. Clones the repo to `/home/{sudo_user_name}/{repo_name}` and verifies the clone.
+
+Security model: every deploy key is scoped to exactly one project. One project =
+one key on GitHub = one private key file on the VPS = one ssh config block. Keys
+are read-only on the repo, stored encrypted (Fernet via the KeyProvider) in
+Abstract's database, and as mode 600 files on the VPS. Compromise of one key
+affects at most one repository.
+
+Project creation follows the same atomicity discipline as hardening: all database
+writes plus the external side effects run inside a single transaction that commits
+only when the clone has been verified. On any failure the transaction rolls back,
+and Abstract makes a best-effort attempt to undo the external state it created
+(delete the GitHub deploy key, remove the key file and config block, remove a
+partial clone), so a retry starts clean. Deleting projects is deferred to the
+server-deletion milestone.
+
 ## Architecture notes
 
 ### Trust on first use (TOFU)
