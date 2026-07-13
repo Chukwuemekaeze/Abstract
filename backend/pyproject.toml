@@ -18,6 +18,7 @@ dependencies = [
     "clerk-backend-api>=6.0,<7",
     "loguru>=0.7,<1",
     "httpx",
+    "dnspython>=2.8.0",
 ]
 
 [project.optional-dependencies]
