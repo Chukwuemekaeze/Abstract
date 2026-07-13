@@ -39,12 +39,18 @@ __all__ = [
     "DuplicateProject",
     "ClonePathOccupied",
     "CloneVerificationFailed",
+    "CloneMissing",
+    "PullFailed",
+    "PullResult",
     "GithubTokenUnavailable",
     "create_project",
+    "pull_latest",
 ]
 
 _TIMEOUT_CHECK = 30
 _TIMEOUT_CLONE = 300
+_TIMEOUT_FETCH = 300
+_TIMEOUT_RESET = 120
 
 
 class ProjectServiceError(Exception):
@@ -69,6 +75,23 @@ class CloneVerificationFailed(ProjectServiceError):
     def __init__(self, captured_output: str):
         self.captured_output = captured_output
         super().__init__(captured_output)
+
+
+class CloneMissing(ProjectServiceError):
+    pass
+
+
+class PullFailed(ProjectServiceError):
+    def __init__(self, captured_output: str):
+        self.captured_output = captured_output
+        super().__init__(captured_output)
+
+
+@dataclass
+class PullResult:
+    before_commit: str
+    after_commit: str
+    already_up_to_date: bool
 
 
 @dataclass
@@ -370,3 +393,73 @@ async def _cleanup_external_state(
                 quoted_clone_path,
                 exc,
             )
+
+
+async def _git(
+    conn: asyncssh.SSHClientConnection,
+    quoted_clone_path: str,
+    args: str,
+    timeout: int,
+) -> str:
+    """Run one git command in the clone dir, returning its combined output.
+
+    args is always a literal string from this module, never client data; the
+    only interpolated value is the already-quoted clone path.
+    """
+    command = f"cd {quoted_clone_path} && git {args}"
+    try:
+        result = await conn.run(command, check=False, timeout=timeout)
+    except (TimeoutError, OSError, asyncssh.Error) as exc:
+        raise PullFailed(f"git {args} did not complete: {exc}") from exc
+    output = f"{result.stdout or ''}{result.stderr or ''}".rstrip()
+    if result.exit_status not in (0, None):
+        raise PullFailed(output)
+    return output
+
+
+async def pull_latest(
+    *,
+    conn: asyncssh.SSHClientConnection,
+    project: Project,
+) -> PullResult:
+    """Sync the clone with origin's default branch: fetch, then hard reset.
+
+    Reset (not pull) so force pushes and local drift in tracked files never
+    wedge the clone; the VPS copy is not for editing. Untracked files, which
+    is where env files normally live, survive: there is deliberately no git
+    clean. Fetch runs before reset, so a failed pull leaves the repo exactly
+    as it was and retries are idempotent. Resetting to the origin/HEAD symref
+    (refreshed via remote set-head) means no branch name is ever interpolated
+    into a shell command. Never commits; the route owns the transaction.
+    """
+    quoted_clone_path = shlex.quote(project.clone_path)
+
+    result = await _run(
+        conn, f"test -d {quoted_clone_path}/.git && echo yes || echo no"
+    )
+    if (result.stdout or "").strip() != "yes":
+        raise CloneMissing(
+            "The clone directory is missing or is not a git repository."
+        )
+
+    before_commit = (
+        await _git(conn, quoted_clone_path, "rev-parse --short HEAD", _TIMEOUT_CHECK)
+    ).strip()
+    await _git(conn, quoted_clone_path, "fetch origin --prune", _TIMEOUT_FETCH)
+    await _git(conn, quoted_clone_path, "remote set-head origin --auto", _TIMEOUT_FETCH)
+    await _git(
+        conn,
+        quoted_clone_path,
+        "reset --hard refs/remotes/origin/HEAD",
+        _TIMEOUT_RESET,
+    )
+    after_commit = (
+        await _git(conn, quoted_clone_path, "rev-parse --short HEAD", _TIMEOUT_CHECK)
+    ).strip()
+
+    project.updated_at = datetime.now(timezone.utc)
+    return PullResult(
+        before_commit=before_commit,
+        after_commit=after_commit,
+        already_up_to_date=before_commit == after_commit,
+    )
