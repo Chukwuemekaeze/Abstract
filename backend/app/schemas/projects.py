@@ -10,6 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.env import validate_env_file_path
+
 # owner/repo where both parts are GitHub-legal characters. This value is later
 # interpolated into shell commands and API paths, so the tight charset is a
 # security boundary, not just validation.
@@ -47,11 +49,36 @@ class ProjectResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     deploy_key_fingerprint: str
+    runtime_status: str
+    started_at: datetime | None
+    compose_file_path: str | None
+    domain: str | None
+    internal_port: int | None
+    published_at: datetime | None
 
 
 class ProjectListItemResponse(ProjectResponse):
     server_name: str
     server_host: str
+
+
+class UpdateProjectRequest(BaseModel):
+    """Advanced settings. compose_file_path=None clears the override so
+    detection falls back to the standard compose file names."""
+
+    compose_file_path: str | None = None
+
+    @field_validator("compose_file_path")
+    @classmethod
+    def _compose_path_valid(cls, v: str | None) -> str | None:
+        return None if v is None else validate_env_file_path(v)
+
+
+class PullResultResponse(BaseModel):
+    before_commit: str
+    after_commit: str
+    already_up_to_date: bool
+    updated_at: datetime
 
 
 class GithubRepoResponse(BaseModel):
