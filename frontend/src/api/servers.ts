@@ -218,25 +218,3 @@ export function usePingServerMutation() {
     },
   })
 }
-
-// Polling ping used during a reboot. Disabled until enabled is true, then refetches
-// on the given interval. retry is off so each poll is a single attempt and a 503
-// (still down) surfaces immediately as an error rather than being retried.
-export function useServerPing(
-  id: string | undefined,
-  options: { enabled: boolean; refetchInterval: number },
-) {
-  return useQuery({
-    queryKey: ['servers', id, 'ping'],
-    enabled: Boolean(id) && options.enabled,
-    refetchInterval: options.refetchInterval,
-    retry: false,
-    gcTime: 0,
-    queryFn: async (): Promise<{ status: string }> => {
-      const { data } = await apiClient.post<{ status: string }>(
-        `/servers/${id}/ping`,
-      )
-      return data
-    },
-  })
-}

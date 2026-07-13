@@ -7,7 +7,7 @@ import { extractErrorMessage } from '@/api/client'
 import { useProjects } from '@/api/projects'
 import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
-import { ProjectCard } from '@/components/ProjectCard'
+import { ProjectCard } from '@/components/projects/ProjectCard'
 import { Button } from '@/components/ui/button'
 import { useNewProjectStore } from '@/store/newProjectStore'
 

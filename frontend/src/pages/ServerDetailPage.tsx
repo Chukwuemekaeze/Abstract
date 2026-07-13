@@ -5,12 +5,12 @@
 // state, disables the other operations, and polls POST /ping every 5s (up to 5 min)
 // until the box answers, then re-enables everything.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { extractHardeningError } from '@/api/client'
+import { apiClient, extractHardeningError } from '@/api/client'
 import {
   type Server,
   type ServerStatus,
@@ -24,13 +24,12 @@ import {
   useInstallNginxMutation,
   useRebootMutation,
   useServer,
-  useServerPing,
   useUpdateSystemMutation,
 } from '@/api/servers'
 import { useProjectsByServer } from '@/api/projects'
 import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
-import { ProjectCard } from '@/components/ProjectCard'
+import { ProjectCard } from '@/components/projects/ProjectCard'
 import {
   OperationCard,
   type OperationStatus,
@@ -48,6 +47,7 @@ const STATUS_META: Record<ServerStatus, { label: string; className: string }> = 
 }
 
 const REBOOT_TIMEOUT_MS = 5 * 60 * 1000
+const REBOOT_PING_INTERVAL_MS = 5000
 
 export function ServerDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -90,7 +90,6 @@ function ServerDetail({ server }: { server: Server }) {
   // Reboot state.
   const [rebooting, setRebooting] = useState(false)
   const [rebootError, setRebootError] = useState<string | null>(null)
-  const rebootDeadline = useRef<number | null>(null)
 
   const updateSystem = useUpdateSystemMutation()
   const installBase = useInstallBasePackagesMutation()
@@ -103,37 +102,40 @@ function ServerDetail({ server }: { server: Server }) {
   const createSwap = useCreateSwapMutation()
   const reboot = useRebootMutation()
 
-  const ping = useServerPing(server.id, {
-    enabled: rebooting,
-    refetchInterval: 5000,
-  })
-
-  // Stop rebooting when the box answers a ping.
-  useEffect(() => {
-    if (rebooting && ping.isSuccess) {
-      setRebooting(false)
-      rebootDeadline.current = null
-      toast.success('Server is back online.')
-    }
-  }, [rebooting, ping.isSuccess])
-
-  // Give up after the timeout window.
+  // Poll ping while rebooting. The effect only subscribes to the external
+  // system (the ping endpoint); every state update happens inside the async
+  // poll callback, when the box answers or the timeout window closes.
   useEffect(() => {
     if (!rebooting) return
-    if (rebootDeadline.current === null) {
-      rebootDeadline.current = Date.now() + REBOOT_TIMEOUT_MS
-    }
-    const timer = setInterval(() => {
-      if (rebootDeadline.current !== null && Date.now() > rebootDeadline.current) {
+    const deadline = Date.now() + REBOOT_TIMEOUT_MS
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+
+    const poll = async () => {
+      try {
+        await apiClient.post(`/servers/${server.id}/ping`)
+        if (cancelled) return
         setRebooting(false)
-        rebootDeadline.current = null
-        setRebootError(
-          "Server has not come back online. Check your VPS provider's console.",
-        )
+        toast.success('Server is back online.')
+      } catch {
+        if (cancelled) return
+        if (Date.now() > deadline) {
+          setRebooting(false)
+          setRebootError(
+            "Server has not come back online. Check your VPS provider's console.",
+          )
+          return
+        }
+        timer = setTimeout(poll, REBOOT_PING_INTERVAL_MS)
       }
-    }, 2000)
-    return () => clearInterval(timer)
-  }, [rebooting])
+    }
+
+    timer = setTimeout(poll, REBOOT_PING_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [rebooting, server.id])
 
   const anyRunning =
     updateSystem.isPending ||
@@ -443,7 +445,6 @@ function ServerDetail({ server }: { server: Server }) {
             setRebootError(null)
             try {
               await reboot.mutateAsync({ serverId: server.id })
-              rebootDeadline.current = null
               setRebooting(true)
               toast.info('Reboot initiated.')
             } catch (err) {
@@ -514,7 +515,11 @@ function ProjectsSection({ server }: { server: Server }) {
       {projects.data && projects.data.length > 0 && (
         <div className="flex flex-col gap-3">
           {projects.data.map((project) => (
-            <ProjectCard key={project.id} project={project} />
+            <ProjectCard
+              key={project.id}
+              project={project}
+              serverHost={server.host}
+            />
           ))}
         </div>
       )}
