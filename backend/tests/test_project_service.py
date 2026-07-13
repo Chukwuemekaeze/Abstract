@@ -273,3 +273,100 @@ async def test_slug_uniqueness_appends_suffix(db_session, test_user, mocker):
         db_session, test_user, server, mocker
     )
     assert project.slug == "anibants-2"
+
+
+# -- pull_latest ----------------------------------------------------------------
+# No DB needed: a SimpleNamespace stands in for the project row, matching how
+# pull_latest only touches clone_path and updated_at.
+
+CLONE_PATH = "/home/deploy/anibantsdotNG"
+
+
+def _fake_pull_project():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        clone_path=CLONE_PATH,
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+async def test_pull_latest_happy_path(mocker):
+    from app.services.project_service import pull_latest
+
+    conn = make_conn(
+        mocker,
+        {"rev-parse --short HEAD": [result("abc1234\n"), result("def5678\n")]},
+    )
+    project = _fake_pull_project()
+    old_updated_at = project.updated_at
+
+    pull = await pull_latest(conn=conn, project=project)
+
+    assert pull.before_commit == "abc1234"
+    assert pull.after_commit == "def5678"
+    assert pull.already_up_to_date is False
+    assert project.updated_at > old_updated_at
+
+    commands = ran_commands(conn)
+    git_commands = [c for c in commands if "&& git " in c]
+    assert git_commands == [
+        f"cd {CLONE_PATH} && git rev-parse --short HEAD",
+        f"cd {CLONE_PATH} && git fetch origin --prune",
+        f"cd {CLONE_PATH} && git remote set-head origin --auto",
+        f"cd {CLONE_PATH} && git reset --hard refs/remotes/origin/HEAD",
+        f"cd {CLONE_PATH} && git rev-parse --short HEAD",
+    ]
+    # The .git precondition check ran before any git command.
+    assert f"{CLONE_PATH}/.git" in commands[0]
+
+
+async def test_pull_latest_already_up_to_date(mocker):
+    from app.services.project_service import pull_latest
+
+    conn = make_conn(mocker, {"rev-parse --short HEAD": result("abc1234\n")})
+    project = _fake_pull_project()
+    old_updated_at = project.updated_at
+
+    pull = await pull_latest(conn=conn, project=project)
+
+    assert pull.already_up_to_date is True
+    assert pull.before_commit == pull.after_commit == "abc1234"
+    # A no-op pull is still a successful pull.
+    assert project.updated_at > old_updated_at
+
+
+async def test_pull_latest_fetch_failure_raises_before_reset(mocker):
+    from app.services.project_service import PullFailed, pull_latest
+
+    conn = make_conn(
+        mocker,
+        {
+            "rev-parse --short HEAD": result("abc1234\n"),
+            "git fetch": result(
+                "", "fatal: Could not read from remote repository", 1
+            ),
+        },
+    )
+    project = _fake_pull_project()
+    old_updated_at = project.updated_at
+
+    with pytest.raises(PullFailed) as exc_info:
+        await pull_latest(conn=conn, project=project)
+
+    assert "Could not read from remote" in exc_info.value.captured_output
+    assert not any("reset --hard" in c for c in ran_commands(conn))
+    assert project.updated_at == old_updated_at
+
+
+async def test_pull_latest_missing_clone_raises(mocker):
+    from app.services.project_service import CloneMissing, pull_latest
+
+    conn = make_conn(mocker, {f"{CLONE_PATH}/.git": result("no\n")})
+    project = _fake_pull_project()
+
+    with pytest.raises(CloneMissing):
+        await pull_latest(conn=conn, project=project)
+
+    assert not any("&& git " in c for c in ran_commands(conn))

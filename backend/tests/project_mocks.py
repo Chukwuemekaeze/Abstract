@@ -44,16 +44,22 @@ class FakeSftp:
 def make_conn(mocker, overrides: dict | None = None):
     """A fake asyncssh connection whose run() is scripted by substring match.
 
-    overrides maps a command substring to either a result(...) to return or an
-    Exception to raise. First match wins; unmatched commands succeed with the
-    defaults (git installed, clone path missing, clone verification passing).
+    overrides maps a command substring to either a result(...) to return, an
+    Exception to raise, or a list of those consumed in order (for commands
+    that run multiple times with different answers). First match wins;
+    unmatched commands succeed with the defaults (git installed, clone path
+    missing, clone verification passing).
     """
     overrides = overrides or {}
     sftp = FakeSftp()
 
-    async def run(command: str, check: bool = False, timeout: int | None = None):
+    async def run(
+        command: str, check: bool = False, timeout: int | None = None, **kwargs
+    ):
         for needle, outcome in overrides.items():
             if needle in command:
+                if isinstance(outcome, list):
+                    outcome = outcome.pop(0) if len(outcome) > 1 else outcome[0]
                 if isinstance(outcome, Exception):
                     raise outcome
                 return outcome
