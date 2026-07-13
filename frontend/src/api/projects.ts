@@ -11,6 +11,8 @@ import { apiClient } from '@/api/client'
 // GitHub deploy key id are deliberately never sent by the backend, so they are
 // absent here too. server_name and server_host are only present on the
 // top-level list endpoint (ProjectListItemResponse).
+export type RuntimeStatus = 'never_started' | 'running' | 'failed'
+
 export interface Project {
   id: string
   name: string
@@ -23,8 +25,40 @@ export interface Project {
   created_at: string
   updated_at: string
   deploy_key_fingerprint: string
+  runtime_status: RuntimeStatus
+  started_at: string | null
+  compose_file_path: string | null
+  domain: string | null
+  internal_port: number | null
+  published_at: string | null
   server_name?: string
   server_host?: string
+}
+
+export interface RunResult {
+  runtime_status: RuntimeStatus
+  started_at: string | null
+  captured_output: string | null
+  build_output?: string | null
+}
+
+export interface DetectedPort {
+  service: string
+  host_port: number
+  container_port: number
+  is_dangerous: boolean
+}
+
+export interface PublishRequest {
+  domain: string
+  internal_port: number
+}
+
+export interface PullResult {
+  before_commit: string
+  after_commit: string
+  already_up_to_date: boolean
+  updated_at: string
 }
 
 // Returned by GET /github/repos, already sorted by pushed_at descending.
@@ -47,6 +81,8 @@ export const projectKeys = {
   all: ['projects'] as const,
   byServer: (serverId: string) => ['projects', 'server', serverId] as const,
   githubRepos: ['github', 'repos'] as const,
+  detectedPorts: (projectId: string) =>
+    ['projects', projectId, 'detected-ports'] as const,
 }
 
 // All of the user's projects across all servers, newest first, with server
@@ -102,5 +138,110 @@ export function useCreateProjectMutation() {
       qc.invalidateQueries({ queryKey: projectKeys.all })
       qc.invalidateQueries({ queryKey: projectKeys.byServer(project.server_id) })
     },
+  })
+}
+
+// Invalidate every projects list so runtime/publish state updates wherever the
+// card is rendered (global list and server detail page).
+function useInvalidateProjects() {
+  const qc = useQueryClient()
+  return () => qc.invalidateQueries({ queryKey: projectKeys.all })
+}
+
+// Start (or restart) the app: the backend writes env files to the VPS and runs
+// `docker compose up -d --build`. Slow by nature; a first build can take
+// minutes. Invalidates on error too, because a failed start still flips
+// runtime_status to failed.
+export function useStartProjectMutation(projectId: string) {
+  const invalidate = useInvalidateProjects()
+  return useMutation({
+    mutationFn: async (): Promise<RunResult> => {
+      const { data } = await apiClient.post<RunResult>(
+        `/projects/${projectId}/start`,
+      )
+      return data
+    },
+    onSettled: invalidate,
+  })
+}
+
+// Sync the clone with origin's default branch (fetch + hard reset on the
+// VPS). onSuccess (not onSettled): a failed pull changes no DB state.
+export function usePullProjectMutation(projectId: string) {
+  const invalidate = useInvalidateProjects()
+  return useMutation({
+    mutationFn: async (): Promise<PullResult> => {
+      const { data } = await apiClient.post<PullResult>(
+        `/projects/${projectId}/pull`,
+      )
+      return data
+    },
+    onSuccess: invalidate,
+  })
+}
+
+// Re-derive runtime_status from `docker compose ps` on the server.
+export function useRefreshStatusMutation(projectId: string) {
+  const invalidate = useInvalidateProjects()
+  return useMutation({
+    mutationFn: async (): Promise<Project> => {
+      const { data } = await apiClient.post<Project>(
+        `/projects/${projectId}/refresh_status`,
+      )
+      return data
+    },
+    onSuccess: invalidate,
+  })
+}
+
+// Host-published ports of the running containers. Only fetched while the
+// publish dialog is open (enabled flag), never on card render.
+export function useDetectedPorts(
+  projectId: string,
+  options: { enabled: boolean },
+) {
+  return useQuery({
+    queryKey: projectKeys.detectedPorts(projectId),
+    enabled: options.enabled,
+    staleTime: 0,
+    queryFn: async (): Promise<DetectedPort[]> => {
+      const { data } = await apiClient.get<DetectedPort[]>(
+        `/projects/${projectId}/detected_ports`,
+      )
+      return data
+    },
+  })
+}
+
+// Publish the running app to a domain via nginx + Let's Encrypt. Slow: the
+// backend waits on certbot and an HTTPS verification round trip.
+export function usePublishProjectMutation(projectId: string) {
+  const invalidate = useInvalidateProjects()
+  return useMutation({
+    mutationFn: async (body: PublishRequest): Promise<Project> => {
+      const { data } = await apiClient.post<Project>(
+        `/projects/${projectId}/publish`,
+        body,
+      )
+      return data
+    },
+    onSuccess: invalidate,
+  })
+}
+
+// Advanced settings; v1 carries only compose_file_path (null clears it).
+export function useUpdateProjectMutation(projectId: string) {
+  const invalidate = useInvalidateProjects()
+  return useMutation({
+    mutationFn: async (body: {
+      compose_file_path: string | null
+    }): Promise<Project> => {
+      const { data } = await apiClient.patch<Project>(
+        `/projects/${projectId}`,
+        body,
+      )
+      return data
+    },
+    onSuccess: invalidate,
   })
 }
