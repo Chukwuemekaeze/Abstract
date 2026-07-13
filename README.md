@@ -224,6 +224,83 @@ and Abstract makes a best-effort attempt to undo the external state it created
 partial clone), so a retry starts clean. Deleting projects is deferred to the
 server-deletion milestone.
 
+## Environment variables
+
+Each project can hold any number of env files (for example `.env` at the repo
+root, or `backend/.env` and `frontend/.env` in a monorepo). Paths are relative to
+the clone directory and validated so they can never escape it.
+
+Values are secrets. They are encrypted at rest (Fernet via the KeyProvider, same
+scheme as SSH keys) the moment they arrive, and the API never returns them again:
+list responses carry variable counts, detail responses carry key names only. In
+the edit dialog, saved values show a hidden placeholder; leave a field untouched
+to keep the stored value, type to replace it.
+
+Conveniences:
+
+- **Paste from .env**: paste the contents of an existing dotenv file and Abstract
+  parses it into the editor (comments and `export` prefixes handled, quotes
+  stripped, no `${VAR}` interpolation).
+- **Write-both behavior**: on start, each env file is written to its configured
+  path on the VPS AND all variables are merged into a root `.env` (unless you
+  manage a root `.env` yourself), so `${VAR}` substitution in docker-compose.yml
+  works automatically. A variable defined with different values in two files is
+  rejected before anything is written.
+
+## Running your app
+
+Abstract is bring-your-own-container: it does not build images or guess your
+stack. Clicking **Start** on a project card runs
+`docker compose up -d --build` in the clone directory over the pooled SSH
+connection, then verifies every service reports `running` (collecting the last
+50 log lines of anything that does not).
+
+Compose file discovery order: `compose.yaml`, `compose.yml`,
+`docker-compose.yaml`, `docker-compose.yml`. If your compose file has a
+non-standard name like `docker-compose.prod.yml`, set it in the project's
+settings (gear icon); the setting is a path relative to the clone directory.
+
+Env files are written to the VPS (mode 600, over SFTP) right before compose
+up. If your repo has files committed at those same paths, they are overwritten
+and a warning is logged. Compose up gets a generous 15 minute budget because
+first builds on small VPSes are slow. On failure the card flips to "Failed to
+start" and the full build transcript is shown in the UI (large logs are
+truncated to the last 200KB, where the errors are); retries are safe.
+
+Abstract treats your current docker-compose.yml as the source of truth. If you
+remove a service from your compose file, its containers are cleaned up
+automatically the next time you Start the project, and verification only checks
+the services your file still defines. Containers from unrelated projects on the
+VPS are never touched.
+
+## Publishing your app
+
+Publishing points a domain at a running app: Abstract writes an nginx server
+block (with websocket upgrade headers included by default), enables it, obtains
+a Let's Encrypt certificate with certbot, and verifies the app answers over
+HTTPS. Certificate renewal is automatic forever via certbot's systemd timer;
+there is nothing to maintain.
+
+Preconditions:
+
+- The app is running (Start it first; the Publish button is disabled otherwise).
+- nginx is installed on the server (the "Install nginx" hardening operation).
+- Your DNS A record for the domain points at the server's IP. Abstract checks
+  this before touching the VPS and tells you what the domain currently resolves
+  to if it does not match.
+
+The internal port is detected automatically from the running containers'
+published ports. Ports that look like databases (5432, 3306, 27017, 6379,
+11211, 9200) are hidden by default so a database is not published to the
+internet by accident; manual entry is available if you know what you are doing.
+One domain and one internal port per server per project, enforced at the
+database level.
+
+If any step fails (nginx rejects the config, certbot cannot complete the
+challenge, nothing answers on the port), Abstract cleans up what it created
+(config, symlink, certificate), reloads nginx, and reports the captured output.
+The database state changes only when the whole flow succeeds.
+
 ## Architecture notes
 
 ### Trust on first use (TOFU)
