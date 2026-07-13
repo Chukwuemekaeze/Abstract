@@ -29,11 +29,17 @@ from app.deps.services import (
 )
 from app.models import Project, ProjectDeployKey, Server, User
 from app.redis_client import get_redis
+from app.deps.project_ownership import get_owned_project
 from app.schemas.projects import (
     CreateProjectRequest,
     GithubRepoResponse,
     ProjectListItemResponse,
     ProjectResponse,
+    UpdateProjectRequest,
+)
+from app.services.env_file_service import (
+    EnvFilePathInvalid,
+    validate_path_within_clone,
 )
 from app.services.clerk_oauth import GithubTokenUnavailable, get_github_oauth_token
 from app.services.github_service import (
@@ -72,6 +78,12 @@ def _project_fields(project: Project, fingerprint: str) -> dict:
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "deploy_key_fingerprint": fingerprint,
+        "runtime_status": project.runtime_status,
+        "started_at": project.started_at,
+        "compose_file_path": project.compose_file_path,
+        "domain": project.domain,
+        "internal_port": project.internal_port,
+        "published_at": project.published_at,
     }
 
 
@@ -240,3 +252,36 @@ async def create_project_route(
     await db.commit()
     await db.refresh(project)
     return ProjectResponse(**_project_fields(project, fingerprint))
+
+
+@router.patch("/api/projects/{project_id}", response_model=ProjectResponse)
+async def update_project_route(
+    body: UpdateProjectRequest,
+    project: Project = Depends(get_owned_project),
+    db: AsyncSession = Depends(get_db),
+) -> ProjectResponse:
+    """Advanced settings. v1 supports only compose_file_path; null clears the
+    override so compose file detection falls back to the standard names."""
+    compose_file_path_from_client = body.compose_file_path
+
+    try:
+        if compose_file_path_from_client is not None:
+            compose_file_path_from_client = validate_path_within_clone(
+                compose_file_path_from_client, project.clone_path
+            )
+        project.compose_file_path = compose_file_path_from_client
+        fingerprint = await db.scalar(
+            select(ProjectDeployKey.deploy_key_fingerprint).where(
+                ProjectDeployKey.project_id == project.id
+            )
+        )
+    except EnvFilePathInvalid as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        await db.rollback()
+        raise
+
+    await db.commit()
+    await db.refresh(project)
+    return ProjectResponse(**_project_fields(project, fingerprint or ""))
