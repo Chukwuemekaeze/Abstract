@@ -23,3 +23,18 @@ async def get_owned_project(
     if project is None or project.user_id != current_user.id:
         raise HTTPException(404, "Project not found")
     return project
+
+
+async def get_editable_project(
+    project: Project = Depends(get_owned_project),
+) -> Project:
+    """Owned project that is not mid-deletion.
+
+    Mutating endpoints depend on this so that once a delete has flipped
+    is_deleting, concurrent writes are rejected with 409 instead of racing the
+    external teardown. Read endpoints keep get_owned_project so the frontend can
+    still render the deleting state.
+    """
+    if project.is_deleting:
+        raise HTTPException(409, "A deletion is in progress for this project.")
+    return project

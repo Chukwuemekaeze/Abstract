@@ -112,13 +112,48 @@ async def _run(
     return await conn.run(command, check=False, timeout=timeout)
 
 
+def _ssh_config_begin_marker(slug: str) -> str:
+    return f"# BEGIN abstract project {slug}"
+
+
+def _ssh_config_end_marker(slug: str) -> str:
+    return f"# END abstract project {slug}"
+
+
 def _ssh_config_block(slug: str) -> str:
     return (
-        f"\nHost github-{slug}\n"
+        f"\n{_ssh_config_begin_marker(slug)}\n"
+        f"Host github-{slug}\n"
         f"  HostName github.com\n"
         f"  User git\n"
         f"  IdentityFile ~/.ssh/{slug}-deploy\n"
         f"  IdentitiesOnly yes\n"
+        f"{_ssh_config_end_marker(slug)}\n"
+    )
+
+
+def ssh_config_removal_command(slug: str) -> str:
+    """Idempotent shell to drop a project's Host block from ~/.ssh/config.
+
+    Two passes, both no-ops when their target is absent, so it is safe to retry
+    and safe on either block shape: a marker-wrapped block (created since this
+    change) is removed inclusively by sed; a bare legacy block (no markers) is
+    removed by awk from the "Host github-{slug}" line up to the next Host line.
+    Wrapped in an `if [ -f ]` so a missing config file exits cleanly (0) rather
+    than failing the deletion step.
+    """
+    begin = _ssh_config_begin_marker(slug)
+    end = _ssh_config_end_marker(slug)
+    sed_expr = f"/{begin}/,/{end}/d"
+    host = f"Host github-{slug}"
+    return (
+        "if [ -f ~/.ssh/config ]; then "
+        f"sed {shlex.quote(sed_expr)} ~/.ssh/config > ~/.ssh/config.tmp && "
+        f"awk -v host={shlex.quote(host)} "
+        "'$0 == host {skip=1; next} skip && /^Host / {skip=0} !skip' "
+        "~/.ssh/config.tmp > ~/.ssh/config.tmp2 && "
+        "mv ~/.ssh/config.tmp2 ~/.ssh/config && rm -f ~/.ssh/config.tmp && "
+        "chmod 600 ~/.ssh/config; fi"
     )
 
 
@@ -271,7 +306,7 @@ async def create_project(
         await _run(
             conn,
             "touch ~/.ssh/config && "
-            f"grep -qF {shlex.quote(f'Host github-{slug}')} ~/.ssh/config || "
+            f"grep -qF {shlex.quote(_ssh_config_begin_marker(slug))} ~/.ssh/config || "
             f"printf '%s' {shlex.quote(block)} >> ~/.ssh/config",
         )
         state.config_block_written = True
@@ -367,16 +402,9 @@ async def _cleanup_external_state(
 
     if state.config_block_written:
         try:
-            # Drop the block from "Host github-{slug}" up to (not including) the
-            # next Host line. Idempotent: no-op when the block is absent.
-            await _run(
-                conn,
-                "test -f ~/.ssh/config && "
-                f"awk -v host='Host github-{slug}' "
-                "'$0 == host {skip=1; next} skip && /^Host / {skip=0} !skip' "
-                "~/.ssh/config > ~/.ssh/config.tmp && "
-                "mv ~/.ssh/config.tmp ~/.ssh/config && chmod 600 ~/.ssh/config",
-            )
+            # Same idempotent removal the deletion path uses, so forward-cleanup
+            # and delete stay identical.
+            await _run(conn, ssh_config_removal_command(slug))
         except Exception as exc:
             logger.warning(
                 "Cleanup failed: could not remove ssh config block for {}: {}",

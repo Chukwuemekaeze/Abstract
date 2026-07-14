@@ -1,8 +1,8 @@
 // A single project card, from top to bottom: header (name, repo link,
-// settings gear), status row (runtime + traffic badges), actions row
+// settings gear, delete), status row (runtime + traffic badges), actions row
 // (Start/Restart, Publish, refresh), the environment section, and a
-// collapsible details block (clone path, fingerprint, dates). No delete in
-// v1; deletion arrives with the server-deletion milestone.
+// collapsible details block (clone path, fingerprint, dates). While a delete
+// is in flight (is_deleting) the mutation UI is replaced by a progress banner.
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -12,10 +12,13 @@ import {
   Copy,
   ExternalLink,
   Globe,
+  Loader2,
   Settings,
+  Trash2,
 } from 'lucide-react'
 
 import { type Project } from '@/api/projects'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -26,6 +29,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { DeleteProjectDialog } from '@/components/projects/DeleteProjectDialog'
 import { EnvFilesSection } from '@/components/projects/EnvFilesSection'
 import { ProjectSettingsDialog } from '@/components/projects/ProjectSettingsDialog'
 import { PublishDialog } from '@/components/projects/PublishDialog'
@@ -67,9 +71,11 @@ export function ProjectCard({
   const [copied, setCopied] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const host = serverHost ?? project.server_host
   const isRunning = project.runtime_status === 'running'
+  const isDeleting = project.is_deleting
 
   const fingerprint = project.deploy_key_fingerprint
   const fingerprintDisplay =
@@ -109,14 +115,24 @@ export function ProjectCard({
             </span>
           )}
         </CardDescription>
-        <CardAction>
+        <CardAction className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
-            className="text-muted-foreground hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground disabled:opacity-40"
             title="Project settings"
+            disabled={isDeleting}
           >
             <Settings className="size-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeleteOpen(true)}
+            className="text-muted-foreground hover:text-destructive disabled:opacity-40"
+            title="Delete project"
+            disabled={isDeleting}
+          >
+            <Trash2 className="size-4" />
           </button>
         </CardAction>
       </CardHeader>
@@ -128,24 +144,39 @@ export function ProjectCard({
           <TrafficBadge project={project} />
         </div>
 
-        {/* Actions row */}
-        <div className="flex flex-wrap items-center gap-2">
-          <RuntimeControls project={project} />
-          <div title={isRunning ? undefined : 'Start your app before publishing'}>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setPublishOpen(true)}
-              disabled={!isRunning || Boolean(project.domain)}
-            >
-              <Globe className="mr-1.5 size-3.5" />
-              Publish
-            </Button>
-          </div>
-        </div>
+        {isDeleting ? (
+          <Alert variant="destructive">
+            <Loader2 className="size-4 animate-spin" />
+            <AlertTitle>Deletion in progress</AlertTitle>
+            <AlertDescription>
+              This project is being deleted. Actions are disabled until it
+              finishes.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <>
+            {/* Actions row */}
+            <div className="flex flex-wrap items-center gap-2">
+              <RuntimeControls project={project} />
+              <div
+                title={isRunning ? undefined : 'Start your app before publishing'}
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPublishOpen(true)}
+                  disabled={!isRunning || Boolean(project.domain)}
+                >
+                  <Globe className="mr-1.5 size-3.5" />
+                  Publish
+                </Button>
+              </div>
+            </div>
 
-        <EnvFilesSection projectId={project.id} />
+            <EnvFilesSection projectId={project.id} />
+          </>
+        )}
 
         {/* Details, collapsed by default */}
         <div>
@@ -211,6 +242,11 @@ export function ProjectCard({
         project={project}
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+      />
+      <DeleteProjectDialog
+        project={project}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
       />
     </Card>
   )

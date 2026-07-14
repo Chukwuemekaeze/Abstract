@@ -4,8 +4,9 @@
 // the keys they affect, all calls go through the shared axios client.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 
-import { apiClient } from '@/api/client'
+import { apiClient, extractErrorMessage } from '@/api/client'
 
 // Shape returned by the backend ProjectResponse schema. Key material and the
 // GitHub deploy key id are deliberately never sent by the backend, so they are
@@ -31,8 +32,21 @@ export interface Project {
   domain: string | null
   internal_port: number | null
   published_at: string | null
+  is_deleting: boolean
   server_name?: string
   server_host?: string
+}
+
+// One step of a project deletion, mirroring the backend DeletionStepResult.
+export interface DeletionStepResult {
+  name: string
+  status: 'completed' | 'skipped' | 'failed'
+  detail: string | null
+}
+
+export interface DeleteProjectResponse {
+  success: boolean
+  steps: DeletionStepResult[]
 }
 
 export interface RunResult {
@@ -227,6 +241,51 @@ export function usePublishProjectMutation(projectId: string) {
     },
     onSuccess: invalidate,
   })
+}
+
+// Delete a project: reverse of create plus post-create cleanup (unpublish,
+// stop containers, remove the clone, revoke the deploy key, drop the row).
+// Invalidates the global list and the owning server's list on success.
+export function useDeleteProjectMutation(projectId: string, serverId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<DeleteProjectResponse> => {
+      const { data } = await apiClient.delete<DeleteProjectResponse>(
+        `/projects/${projectId}`,
+      )
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.all })
+      qc.invalidateQueries({ queryKey: projectKeys.byServer(serverId) })
+    },
+  })
+}
+
+// Pull the structured deletion failure out of a 502. The backend returns
+// { message, failed_step, steps } so the dialog can show which step failed and
+// the full per-step progress. Falls back to extractErrorMessage for plain
+// details (e.g. a 409 while a delete is already in flight) and non-axios errors.
+export function extractDeletionError(
+  error: unknown,
+  fallback = 'Deleting the project failed',
+): { message: string; failedStep: string | null; steps: DeletionStepResult[] } {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+    if (detail && typeof detail === 'object') {
+      return {
+        message: typeof detail.message === 'string' ? detail.message : fallback,
+        failedStep:
+          typeof detail.failed_step === 'string' ? detail.failed_step : null,
+        steps: Array.isArray(detail.steps) ? detail.steps : [],
+      }
+    }
+  }
+  return {
+    message: extractErrorMessage(error, fallback),
+    failedStep: null,
+    steps: [],
+  }
 }
 
 // Advanced settings; v1 carries only compose_file_path (null clears it).

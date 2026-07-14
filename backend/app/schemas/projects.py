@@ -6,6 +6,7 @@ GitHub's deploy key ID.
 """
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -55,6 +56,7 @@ class ProjectResponse(BaseModel):
     domain: str | None
     internal_port: int | None
     published_at: datetime | None
+    is_deleting: bool
 
 
 class ProjectListItemResponse(ProjectResponse):
@@ -87,3 +89,16 @@ class GithubRepoResponse(BaseModel):
     name: str
     pushed_at: datetime | None
     private: bool
+
+
+class DeletionStepResult(BaseModel):
+    """One step of a project deletion: what it was and how it finished."""
+
+    name: str
+    status: Literal["completed", "skipped", "failed"]
+    detail: str | None = None
+
+
+class DeleteProjectResponse(BaseModel):
+    success: bool
+    steps: list[DeletionStepResult]

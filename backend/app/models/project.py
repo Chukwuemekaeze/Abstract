@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -98,6 +99,15 @@ class Project(Base):
     internal_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # True only for the duration of a delete: set before any external teardown
+    # runs (so concurrent mutations are rejected 409) and cleared again if a
+    # step fails so the user can retry. The row is hard-deleted on success.
+    is_deleting: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

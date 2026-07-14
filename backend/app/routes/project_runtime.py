@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps.auth import get_current_session_id, get_current_user
-from app.deps.project_ownership import get_owned_project
+from app.deps.project_ownership import get_editable_project, get_owned_project
 from app.deps.services import get_key_provider_dep, get_ssh_service
 from app.models import Project, ProjectDeployKey, Server, User
 from app.redis_client import get_redis
@@ -72,7 +72,7 @@ async def _get_server(db: AsyncSession, project: Project) -> Server:
 
 @router.post("/api/projects/{project_id}/start", response_model=RunResultResponse)
 async def start_project_route(
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     current_user: User = Depends(get_current_user),
     session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
@@ -147,7 +147,7 @@ async def start_project_route(
 
 @router.post("/api/projects/{project_id}/pull", response_model=PullResultResponse)
 async def pull_latest_route(
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     current_user: User = Depends(get_current_user),
     session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
@@ -204,7 +204,7 @@ async def pull_latest_route(
     "/api/projects/{project_id}/refresh_status", response_model=ProjectResponse
 )
 async def refresh_status_route(
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     current_user: User = Depends(get_current_user),
     session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
@@ -273,7 +273,7 @@ async def detected_ports_route(
 @router.post("/api/projects/{project_id}/publish", response_model=ProjectResponse)
 async def publish_project_route(
     body: PublishRequest,
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     current_user: User = Depends(get_current_user),
     session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
