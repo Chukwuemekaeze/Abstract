@@ -221,8 +221,8 @@ writes plus the external side effects run inside a single transaction that commi
 only when the clone has been verified. On any failure the transaction rolls back,
 and Abstract makes a best-effort attempt to undo the external state it created
 (delete the GitHub deploy key, remove the key file and config block, remove a
-partial clone), so a retry starts clean. Deleting projects is deferred to the
-server-deletion milestone.
+partial clone), so a retry starts clean. Deleting a project reverses all of this
+plus everything accumulated since; see [Deleting a project](#deleting-a-project).
 
 ## Environment variables
 
@@ -300,6 +300,39 @@ If any step fails (nginx rejects the config, certbot cannot complete the
 challenge, nothing answers on the port), Abstract cleans up what it created
 (config, symlink, certificate), reloads nginx, and reports the captured output.
 The database state changes only when the whole flow succeeds.
+
+## Deleting a project
+
+Deletion is the exact reverse of creation plus teardown of everything a project
+accumulates afterward. It removes the container stack, the clone, the published
+nginx config and Let's Encrypt certificate, the ssh config block and deploy key
+files on the VPS, the GitHub deploy key, and finally the database rows (env files
+and variables cascade). Once a VPS is registered on Abstract the only path to it
+is through Abstract, so the clone directory is always removed; there is no opt-out.
+The delete dialog requires typing the project name to confirm.
+
+The steps run in a fixed order, each one idempotent so a retry after a partial
+failure lands cleanly:
+
+1. **unpublish** (skipped if never published): remove the nginx symlink and
+   config, delete the certificate (guarded so a retry after a successful delete is
+   safe), then validate and reload nginx.
+2. **stop containers** (skipped if not running): `docker compose down
+   --remove-orphans` in the clone, honoring a compose file override. A missing
+   compose file is a no-op rather than an error.
+3. **delete clone**: `rm -rf` the clone directory, under sudo so root-owned build
+   artifacts a container may have written are removed too.
+4. **remove ssh config block** and **delete deploy key files** on the VPS.
+5. **revoke the GitHub deploy key** (a 404 counts as already gone).
+6. **delete the database row**, cascading to env files and variables.
+
+While a delete is in flight the project carries an `is_deleting` flag: it is set
+in its own commit before any external teardown runs, so concurrent mutations are
+rejected with 409, and the card shows a "deletion in progress" banner. If any step
+fails the whole deletion aborts with no orphan records anywhere: the row stays,
+the flag is cleared so you can retry, and the API returns a 502 whose body names
+the failed step and the full per-step progress. On success the row is
+hard-deleted; there is no soft-delete.
 
 ## Architecture notes
 
