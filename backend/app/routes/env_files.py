@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.deps.project_ownership import get_owned_project
+from app.deps.project_ownership import get_editable_project, get_owned_project
 from app.deps.services import get_key_provider_dep
 from app.models import Project
 from app.schemas.env import (
@@ -80,7 +80,7 @@ async def get_env_file_route(
 @router.post("", response_model=EnvFileDetailResponse)
 async def create_env_file_route(
     body: CreateEnvFileRequest,
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     db: AsyncSession = Depends(get_db),
     key_provider: KeyProvider = Depends(get_key_provider_dep),
 ) -> EnvFileDetailResponse:
@@ -114,7 +114,7 @@ async def create_env_file_route(
 async def update_env_file_route(
     env_file_id: UUID,
     body: UpdateEnvFileRequest,
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     db: AsyncSession = Depends(get_db),
     key_provider: KeyProvider = Depends(get_key_provider_dep),
 ) -> EnvFileDetailResponse:
@@ -154,7 +154,7 @@ async def update_env_file_route(
 @router.delete("/{env_file_id}", status_code=204)
 async def delete_env_file_route(
     env_file_id: UUID,
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     try:
