@@ -29,9 +29,10 @@ from app.deps.services import (
 )
 from app.models import Project, ProjectDeployKey, Server, User
 from app.redis_client import get_redis
-from app.deps.project_ownership import get_owned_project
+from app.deps.project_ownership import get_editable_project, get_owned_project
 from app.schemas.projects import (
     CreateProjectRequest,
+    DeleteProjectResponse,
     GithubRepoResponse,
     ProjectListItemResponse,
     ProjectResponse,
@@ -49,6 +50,10 @@ from app.services.github_service import (
     GithubService,
 )
 from app.services.key_provider import KeyProvider
+from app.services.project_deletion_service import (
+    ProjectDeletionError,
+    delete_project,
+)
 from app.services.project_service import (
     ClonePathOccupied,
     CloneVerificationFailed,
@@ -84,6 +89,7 @@ def _project_fields(project: Project, fingerprint: str) -> dict:
         "domain": project.domain,
         "internal_port": project.internal_port,
         "published_at": project.published_at,
+        "is_deleting": project.is_deleting,
     }
 
 
@@ -257,7 +263,7 @@ async def create_project_route(
 @router.patch("/api/projects/{project_id}", response_model=ProjectResponse)
 async def update_project_route(
     body: UpdateProjectRequest,
-    project: Project = Depends(get_owned_project),
+    project: Project = Depends(get_editable_project),
     db: AsyncSession = Depends(get_db),
 ) -> ProjectResponse:
     """Advanced settings. v1 supports only compose_file_path; null clears the
@@ -285,3 +291,58 @@ async def update_project_route(
     await db.commit()
     await db.refresh(project)
     return ProjectResponse(**_project_fields(project, fingerprint or ""))
+
+
+@router.delete("/api/projects/{project_id}", response_model=DeleteProjectResponse)
+async def delete_project_route(
+    project: Project = Depends(get_owned_project),
+    current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+    ssh: SSHService = Depends(get_ssh_service),
+    key_provider: KeyProvider = Depends(get_key_provider_dep),
+    clerk: Clerk = Depends(get_clerk_client),
+    github: GithubService = Depends(get_github_service),
+) -> DeleteProjectResponse:
+    """Reverse of create plus post-create cleanup: unpublish, stop containers,
+    delete the clone, remove VPS ssh state, revoke the GitHub deploy key, then
+    hard-delete the row (cascade removes env files, env vars, deploy key).
+
+    Uses get_owned_project (not get_editable_project) so the frontend can keep
+    reading the deleting state; a second delete of an already-deleting project
+    is rejected here with 409. The deletion service owns its own transactions.
+    """
+    if project.is_deleting:
+        raise HTTPException(
+            409, "A deletion is already in progress for this project."
+        )
+
+    server = await db.get(Server, project.server_id)
+    if server is None:
+        raise HTTPException(404, "Server not found")
+
+    try:
+        steps = await delete_project(
+            project=project,
+            server=server,
+            current_user=current_user,
+            session_id=session_id,
+            db=db,
+            ssh=ssh,
+            redis=redis,
+            key_provider=key_provider,
+            clerk=clerk,
+            github=github,
+        )
+    except ProjectDeletionError as exc:
+        raise HTTPException(
+            502,
+            detail={
+                "message": exc.message,
+                "failed_step": exc.failed_step,
+                "steps": [step.model_dump() for step in exc.steps],
+            },
+        ) from exc
+
+    return DeleteProjectResponse(success=True, steps=steps)
