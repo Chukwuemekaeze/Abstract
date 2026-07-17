@@ -89,7 +89,7 @@ def _project_fields(project: Project, fingerprint: str) -> dict:
         "domain": project.domain,
         "internal_port": project.internal_port,
         "published_at": project.published_at,
-        "is_deleting": project.is_deleting,
+        "active_operation": project.active_operation,
     }
 
 
@@ -309,13 +309,15 @@ async def delete_project_route(
     delete the clone, remove VPS ssh state, revoke the GitHub deploy key, then
     hard-delete the row (cascade removes env files, env vars, deploy key).
 
-    Uses get_owned_project (not get_editable_project) so the frontend can keep
-    reading the deleting state; a second delete of an already-deleting project
-    is rejected here with 409. The deletion service owns its own transactions.
+    Uses get_owned_project (not get_idle_project) so the frontend can keep
+    reading the in-progress state; a delete that races another operation on the
+    project is rejected here with 409. The deletion service owns its own
+    transactions.
     """
-    if project.is_deleting:
+    if project.active_operation is not None:
         raise HTTPException(
-            409, "A deletion is already in progress for this project."
+            409,
+            detail={"active_operation": project.active_operation},
         )
 
     server = await db.get(Server, project.server_id)

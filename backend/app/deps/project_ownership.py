@@ -2,6 +2,12 @@
 
 Resolves a project by id and enforces that it belongs to the current user.
 Returns 404 (not 403) on a mismatch so we do not leak which project ids exist.
+
+A project also carries a single active_operation lock (start, rollback,
+publish, delete). Mutating endpoints depend on get_idle_project so that while
+one operation runs, concurrent ones are rejected with 409 instead of racing on
+the same VPS. Read endpoints keep get_owned_project so the frontend can still
+render the in-progress state.
 """
 
 from uuid import UUID
@@ -25,16 +31,24 @@ async def get_owned_project(
     return project
 
 
-async def get_editable_project(
+async def get_idle_project(
     project: Project = Depends(get_owned_project),
 ) -> Project:
-    """Owned project that is not mid-deletion.
+    """Owned project with no operation in flight.
 
-    Mutating endpoints depend on this so that once a delete has flipped
-    is_deleting, concurrent writes are rejected with 409 instead of racing the
-    external teardown. Read endpoints keep get_owned_project so the frontend can
-    still render the deleting state.
+    Rejects with 409 and a structured {"active_operation": ...} detail the
+    frontend banner reads, so a second start/rollback/publish cannot race the
+    one already running against the VPS.
     """
-    if project.is_deleting:
-        raise HTTPException(409, "A deletion is in progress for this project.")
+    if project.active_operation is not None:
+        raise HTTPException(
+            409,
+            detail={"active_operation": project.active_operation},
+        )
     return project
+
+
+# Backwards-compatible alias: existing mutating endpoints imported
+# get_editable_project when the only lock was is_deleting. It now guards against
+# every active_operation.
+get_editable_project = get_idle_project

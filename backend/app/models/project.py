@@ -12,19 +12,19 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -100,15 +100,11 @@ class Project(Base):
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # True only for the duration of a delete: set before any external teardown
-    # runs (so concurrent mutations are rejected 409) and cleared again if a
-    # step fails so the user can retry. The row is hard-deleted on success.
-    is_deleting: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default=text("false"),
-    )
+    # The single in-flight operation holding this project: 'starting',
+    # 'rolling_back', 'publishing', 'deleting', or null when idle. Set in a short
+    # transaction before external side effects run so concurrent mutations are
+    # rejected 409, and cleared again when the operation finishes or fails.
+    active_operation: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -118,4 +114,10 @@ class Project(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+    runs: Mapped[list["ProjectRun"]] = relationship(  # noqa: F821
+        "ProjectRun",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

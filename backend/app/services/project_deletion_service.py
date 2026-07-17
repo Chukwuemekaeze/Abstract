@@ -4,12 +4,13 @@ Let's Encrypt cert).
 
 Transaction model (this is the one service allowed to manage its own
 transactions):
-  * Commit A flips is_deleting=true so concurrent mutations see it immediately.
+  * Commit A sets active_operation='deleting' so concurrent mutations see it
+    immediately.
   * All external side effects (SSH, GitHub) then run with NO DB transaction
     held open.
   * Commit B either hard-deletes the row (cascade removes env files, env vars,
-    and the deploy key row) on success, or clears is_deleting on failure so the
-    user can retry.
+    the deploy key row, and run history) on success, or clears active_operation
+    on failure so the user can retry.
 
 Any step failure aborts the whole deletion, leaves the row intact, and raises
 ProjectDeletionError carrying the ordered step list so the route can return a
@@ -45,7 +46,7 @@ _TIMEOUT_CLONE = 300
 
 
 class ProjectDeletionError(Exception):
-    """A deletion step failed; the DB row is intact and is_deleting is cleared."""
+    """A deletion step failed; the row is intact and active_operation is cleared."""
 
     def __init__(
         self, *, failed_step: str, steps: list[DeletionStepResult], message: str
@@ -133,12 +134,12 @@ def _compose_down_command(clone_path: str, compose_file_path: str | None) -> str
     )
 
 
-async def _clear_is_deleting(db: AsyncSession, project_id: UUID) -> None:
-    """Commit B (failure path): drop the flag so the user can retry."""
+async def _clear_active_operation(db: AsyncSession, project_id: UUID) -> None:
+    """Commit B (failure path): drop the lock so the user can retry."""
     await db.rollback()
     project = await db.get(Project, project_id)
     if project is not None:
-        project.is_deleting = False
+        project.active_operation = None
         await db.commit()
 
 
@@ -156,7 +157,7 @@ async def delete_project(
     github: GithubService,
 ) -> list[DeletionStepResult]:
     """Run the ordered teardown. Returns the step list on success; raises
-    ProjectDeletionError (row intact, is_deleting cleared) on any failure."""
+    ProjectDeletionError (row intact, active_operation cleared) on any failure."""
     # Snapshot everything the side-effect steps need before Commit A expires the
     # instance, so no lazy load happens while there is no transaction open.
     project_id = project.id
@@ -174,8 +175,8 @@ async def delete_project(
         )
     )
 
-    # -- Commit A: is_deleting visible to concurrent requests immediately -----
-    project.is_deleting = True
+    # -- Commit A: the lock is visible to concurrent requests immediately -----
+    project.active_operation = "deleting"
     await db.commit()
 
     steps: list[DeletionStepResult] = []
@@ -309,7 +310,7 @@ async def delete_project(
         steps.append(
             DeletionStepResult(name=exc.step, status="failed", detail=exc.detail)
         )
-        await _clear_is_deleting(db, project_id)
+        await _clear_active_operation(db, project_id)
         logger.warning(
             "Project deletion aborted at step {} for project {}: {}",
             exc.step,
