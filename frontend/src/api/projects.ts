@@ -8,6 +8,14 @@ import axios from 'axios'
 
 import { apiClient, extractErrorMessage } from '@/api/client'
 
+// The single in-flight operation holding a project, or null when idle. Mirrors
+// the backend projects.active_operation column.
+export type ActiveOperation =
+  | 'starting'
+  | 'rolling_back'
+  | 'publishing'
+  | 'deleting'
+
 // Shape returned by the backend ProjectResponse schema. Key material and the
 // GitHub deploy key id are deliberately never sent by the backend, so they are
 // absent here too. server_name and server_host are only present on the
@@ -32,9 +40,28 @@ export interface Project {
   domain: string | null
   internal_port: number | null
   published_at: string | null
-  is_deleting: boolean
+  active_operation: ActiveOperation | null
   server_name?: string
   server_host?: string
+}
+
+// Run history, mirroring the backend ProjectRun schemas. build_output is only
+// present on the detail response, never in the list.
+export type ProjectRunStatus = 'running' | 'superseded' | 'failed'
+
+export interface ProjectRun {
+  id: string
+  project_id: string
+  git_commit_sha: string
+  git_ref: string | null
+  status: ProjectRunStatus
+  started_at: string
+  finished_at: string | null
+  created_at: string
+}
+
+export interface ProjectRunDetail extends ProjectRun {
+  build_output: string | null
 }
 
 // One step of a project deletion, mirroring the backend DeletionStepResult.
@@ -97,6 +124,12 @@ export const projectKeys = {
   githubRepos: ['github', 'repos'] as const,
   detectedPorts: (projectId: string) =>
     ['projects', projectId, 'detected-ports'] as const,
+}
+
+export const projectRunKeys = {
+  list: (projectId: string) => ['projects', projectId, 'runs'] as const,
+  detail: (projectId: string, runId: string) =>
+    ['projects', projectId, 'runs', runId] as const,
 }
 
 // All of the user's projects across all servers, newest first, with server
@@ -302,5 +335,59 @@ export function useUpdateProjectMutation(projectId: string) {
       return data
     },
     onSuccess: invalidate,
+  })
+}
+
+// Run history for a project, newest first. build_output is omitted here; fetch
+// it on demand with useProjectRunDetail.
+export function useProjectRuns(projectId: string) {
+  return useQuery({
+    queryKey: projectRunKeys.list(projectId),
+    queryFn: async (): Promise<ProjectRun[]> => {
+      const { data } = await apiClient.get<ProjectRun[]>(
+        `/projects/${projectId}/runs`,
+      )
+      return data
+    },
+  })
+}
+
+// A single run including its build_output. Only fetched when enabled (e.g. a
+// build-output modal is open), never eagerly.
+export function useProjectRunDetail(
+  projectId: string,
+  runId: string | null,
+  options: { enabled: boolean },
+) {
+  return useQuery({
+    queryKey: projectRunKeys.detail(projectId, runId ?? ''),
+    enabled: options.enabled && runId !== null,
+    queryFn: async (): Promise<ProjectRunDetail> => {
+      const { data } = await apiClient.get<ProjectRunDetail>(
+        `/projects/${projectId}/runs/${runId}`,
+      )
+      return data
+    },
+  })
+}
+
+// Roll back to a prior run's commit: the backend checks out the recorded SHA
+// and rebuilds. Mirrors start's response (RunResult) and, on failure, the same
+// 502 with build_output in the detail. Invalidates the run history, this
+// project's detail, and every projects list so the operation banner clears.
+export function useRollbackProjectMutation(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (targetRunId: string): Promise<RunResult> => {
+      const { data } = await apiClient.post<RunResult>(
+        `/projects/${projectId}/rollback`,
+        { target_run_id: targetRunId },
+      )
+      return data
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: projectRunKeys.list(projectId) })
+      qc.invalidateQueries({ queryKey: projectKeys.all })
+    },
   })
 }
