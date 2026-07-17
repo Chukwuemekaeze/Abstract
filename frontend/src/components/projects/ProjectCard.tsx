@@ -1,8 +1,9 @@
 // A single project card, from top to bottom: header (name, repo link,
 // settings gear, delete), status row (runtime + traffic badges), actions row
-// (Start/Restart, Publish, refresh), the environment section, and a
-// collapsible details block (clone path, fingerprint, dates). While a delete
-// is in flight (is_deleting) the mutation UI is replaced by a progress banner.
+// (Start/Restart, Publish, refresh), the environment section, version history,
+// and a collapsible details block (clone path, fingerprint, dates). While any
+// operation is in flight (active_operation) the mutation UI is replaced by a
+// progress banner and destructive controls are disabled.
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -37,7 +38,16 @@ import {
   RuntimeControls,
   RuntimeStatusBadge,
 } from '@/components/projects/RuntimeControls'
+import { VersionHistorySection } from '@/components/projects/VersionHistorySection'
 import { cn } from '@/lib/utils'
+
+// Human-readable label for the in-progress banner.
+const OPERATION_LABEL: Record<string, string> = {
+  starting: 'starting',
+  rolling_back: 'rolling back',
+  publishing: 'publishing',
+  deleting: 'deleting',
+}
 
 function TrafficBadge({ project }: { project: Project }) {
   if (project.domain) {
@@ -75,7 +85,11 @@ export function ProjectCard({
 
   const host = serverHost ?? project.server_host
   const isRunning = project.runtime_status === 'running'
-  const isDeleting = project.is_deleting
+  const activeOperation = project.active_operation
+  const isBusy = activeOperation !== null
+  const operationLabel = activeOperation
+    ? (OPERATION_LABEL[activeOperation] ?? activeOperation)
+    : ''
 
   const fingerprint = project.deploy_key_fingerprint
   const fingerprintDisplay =
@@ -121,7 +135,7 @@ export function ProjectCard({
             onClick={() => setSettingsOpen(true)}
             className="text-muted-foreground hover:text-foreground disabled:opacity-40"
             title="Project settings"
-            disabled={isDeleting}
+            disabled={isBusy}
           >
             <Settings className="size-4" />
           </button>
@@ -130,7 +144,7 @@ export function ProjectCard({
             onClick={() => setDeleteOpen(true)}
             className="text-muted-foreground hover:text-destructive disabled:opacity-40"
             title="Delete project"
-            disabled={isDeleting}
+            disabled={isBusy}
           >
             <Trash2 className="size-4" />
           </button>
@@ -144,13 +158,12 @@ export function ProjectCard({
           <TrafficBadge project={project} />
         </div>
 
-        {isDeleting ? (
-          <Alert variant="destructive">
+        {isBusy ? (
+          <Alert>
             <Loader2 className="size-4 animate-spin" />
-            <AlertTitle>Deletion in progress</AlertTitle>
+            <AlertTitle>Operation in progress: {operationLabel}</AlertTitle>
             <AlertDescription>
-              This project is being deleted. Actions are disabled until it
-              finishes.
+              Actions are disabled until it finishes.
             </AlertDescription>
           </Alert>
         ) : (
@@ -177,6 +190,8 @@ export function ProjectCard({
             <EnvFilesSection projectId={project.id} />
           </>
         )}
+
+        <VersionHistorySection project={project} />
 
         {/* Details, collapsed by default */}
         <div>

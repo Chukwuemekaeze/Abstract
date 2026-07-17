@@ -3,8 +3,8 @@
 DB backed (TEST_DATABASE_URL). SSH is a substring-scripted fake, GitHub and the
 Clerk OAuth token fetch are mocked at the boundary. The deletion service owns
 its own transactions, so these tests assert both the HTTP contract and the DB
-side effects (row gone on success, row intact and is_deleting cleared on any
-failure).
+side effects (row gone on success, row intact and active_operation cleared on
+any failure).
 """
 
 from datetime import datetime, timezone
@@ -202,7 +202,7 @@ async def test_github_404_is_success(client, delete_env, db_session, test_user):
     assert await db_session.get(Project, project.id) is None
 
 
-# -- each step failing aborts and clears is_deleting -------------------------
+# -- each step failing aborts and clears active_operation --------------------
 
 
 @pytest.mark.parametrize(
@@ -234,7 +234,7 @@ async def test_shell_step_failure_aborts(
     survivor = await db_session.get(Project, project.id)
     await db_session.refresh(survivor)
     assert survivor is not None
-    assert survivor.is_deleting is False
+    assert survivor.active_operation is None
 
 
 async def test_github_revoke_failure_aborts(
@@ -253,7 +253,7 @@ async def test_github_revoke_failure_aborts(
     survivor = await db_session.get(Project, project.id)
     await db_session.refresh(survivor)
     assert survivor is not None
-    assert survivor.is_deleting is False
+    assert survivor.active_operation is None
 
 
 # -- concurrency guard -------------------------------------------------------
@@ -263,7 +263,7 @@ async def test_delete_while_deleting_returns_409(
     client, delete_env, db_session, test_user
 ):
     project = await _published_running_project(db_session, test_user)
-    project.is_deleting = True
+    project.active_operation = "deleting"
     await db_session.commit()
 
     resp = await client.delete(f"/api/projects/{project.id}")
@@ -275,7 +275,7 @@ async def test_mutations_blocked_while_deleting(
     client, delete_env, db_session, test_user
 ):
     project = await _published_running_project(db_session, test_user)
-    project.is_deleting = True
+    project.active_operation = "deleting"
     await db_session.commit()
 
     # A representative mutating endpoint is rejected with 409, not 404/500.

@@ -38,6 +38,7 @@ __all__ = [
     "ComposeUpFailed",
     "ContainerNotRunning",
     "ComposeConfigInvalid",
+    "RollbackCheckoutFailed",
     "DetectedPort",
     "RunResult",
     "BUILD_OUTPUT_MAX_BYTES",
@@ -46,6 +47,8 @@ __all__ = [
     "write_env_files_to_vps",
     "run_compose_up",
     "verify_containers_running",
+    "rollback_checkout",
+    "execute_run",
     "start_project",
     "refresh_status",
     "get_detected_ports",
@@ -123,6 +126,16 @@ class ComposeConfigInvalid(RunServiceError):
     def __init__(self, captured_output: str):
         self.captured_output = captured_output
         super().__init__("docker compose could not read the compose file")
+
+
+class RollbackCheckoutFailed(RunServiceError):
+    """git fetch or checkout failed on the VPS during a rollback. We never stash:
+    a dirty tree means something wrote to the clone outside Abstract, and that
+    should surface loudly rather than be papered over."""
+
+    def __init__(self, captured_output: str):
+        self.captured_output = captured_output
+        super().__init__("git checkout failed during rollback")
 
 
 @dataclass
@@ -414,14 +427,48 @@ async def verify_containers_running(
     return False, "\n".join(chunks)
 
 
-async def start_project(
+async def rollback_checkout(
+    conn: asyncssh.SSHClientConnection, clone_path: str, commit_sha: str
+) -> None:
+    """Fetch and check out an exact commit on the VPS before a rollback rebuild.
+
+    `git fetch origin` is idempotent and brings in any objects the clone is
+    missing; `git checkout <sha>` leaves a detached HEAD, which is expected. We
+    deliberately do NOT stash: a checkout that fails on local changes means
+    something wrote to the git tree outside Abstract (whose own writes go to the
+    configured env file paths), and that must surface loudly.
+    """
+    quoted_clone = shlex.quote(clone_path)
+    quoted_sha = shlex.quote(commit_sha)
+    command = (
+        f"cd {quoted_clone} && "
+        f"git fetch origin && "
+        f"git checkout {quoted_sha}"
+    )
+    try:
+        result = await _run(conn, command, timeout=_TIMEOUT_COMPOSE_UP)
+    except (TimeoutError, asyncssh.Error, OSError) as exc:
+        raise RollbackCheckoutFailed(
+            truncate_build_output(f"git checkout did not complete: {exc}")
+        ) from exc
+    if result.exit_status not in (0, None):
+        body = f"{result.stdout or ''}{result.stderr or ''}".rstrip()
+        raise RollbackCheckoutFailed(truncate_build_output(body))
+
+
+async def execute_run(
     *,
     conn: asyncssh.SSHClientConnection,
     project: Project,
     db: AsyncSession,
     key_provider: KeyProvider,
 ) -> RunResult:
-    """Detect compose file, write env files, compose up, verify, mark running.
+    """Shared run mechanics for start and rollback: detect compose file, write
+    env files, compose up, verify, mark running.
+
+    Rollback checks out an older commit before calling this; start runs it
+    against HEAD. Env vars always come from the current DB state, never a
+    snapshot, so a rollback never silently reintroduces rotated secrets.
 
     Raises ComposeFileNotFound, EnvFileKeyCollision, ComposeUpFailed, or
     ContainerNotRunning; the caller's rollback keeps runtime_status at
@@ -465,6 +512,20 @@ async def start_project(
         started_at=now,
         captured_output=None,
         build_output=truncate_build_output(build_output),
+    )
+
+
+async def start_project(
+    *,
+    conn: asyncssh.SSHClientConnection,
+    project: Project,
+    db: AsyncSession,
+    key_provider: KeyProvider,
+) -> RunResult:
+    """Run the project against its current HEAD. Thin wrapper over execute_run,
+    kept for callers that start without a rollback checkout."""
+    return await execute_run(
+        conn=conn, project=project, db=db, key_provider=key_provider
     )
 
 

@@ -56,7 +56,7 @@ class ProjectResponse(BaseModel):
     domain: str | None
     internal_port: int | None
     published_at: datetime | None
-    is_deleting: bool
+    active_operation: str | None
 
 
 class ProjectListItemResponse(ProjectResponse):
