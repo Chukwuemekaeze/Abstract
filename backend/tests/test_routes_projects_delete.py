@@ -26,7 +26,7 @@ pytestmark = requires_db
 
 STEP_ORDER = [
     "unpublish",
-    "stop_containers",
+    "remove_docker_artifacts",
     "delete_clone",
     "remove_ssh_config_block",
     "delete_vps_deploy_key_files",
@@ -94,7 +94,9 @@ def _steps_by_name(body: dict) -> dict[str, dict]:
 
 def test_compose_down_guards_on_present_compose_file():
     cmd = _compose_down_command("/home/deploy/app", None)
-    assert "down --remove-orphans" in cmd
+    # -v drops named volumes and --rmi all drops images, so nothing docker
+    # related survives the delete.
+    assert "down -v --rmi all --remove-orphans" in cmd
     # A missing compose file (e.g. stripped by a prior partial rm) is a no-op,
     # not an error, so retries land cleanly.
     assert "[ -f compose.yaml ]" in cmd
@@ -103,7 +105,10 @@ def test_compose_down_guards_on_present_compose_file():
 
 def test_compose_down_honors_override():
     cmd = _compose_down_command("/home/deploy/app", "docker-compose.prod.yml")
-    assert "docker compose -f docker-compose.prod.yml down" in cmd
+    assert (
+        "docker compose -f docker-compose.prod.yml down -v --rmi all --remove-orphans"
+        in cmd
+    )
     assert "[ -f docker-compose.prod.yml ]" in cmd
 
 
@@ -160,22 +165,40 @@ async def test_never_published_skips_unpublish(
 
     body = (await client.delete(f"/api/projects/{project.id}")).json()
     assert _steps_by_name(body)["unpublish"]["status"] == "skipped"
-    assert _steps_by_name(body)["stop_containers"]["status"] == "completed"
+    assert _steps_by_name(body)["remove_docker_artifacts"]["status"] == "completed"
 
 
-async def test_not_running_skips_stop_containers(
+async def test_failed_status_still_removes_docker_artifacts(
     client, delete_env, db_session, test_user
 ):
+    # A failed start leaves containers, volumes, and images behind, so the
+    # cleanup must run even though the project is not running.
+    server = await make_server(db_session, test_user.id)
+    project = await seed_project(
+        db_session, test_user.id, server, runtime_status="failed"
+    )
+
+    body = (await client.delete(f"/api/projects/{project.id}")).json()
+    assert _steps_by_name(body)["remove_docker_artifacts"]["status"] == "completed"
+
+
+async def test_never_started_with_clone_path_still_removes_docker_artifacts(
+    client, delete_env, db_session, test_user
+):
+    # never_started but cloned: the box may still hold a partially built image
+    # or volume, so gate on whether it was cloned, not runtime status.
     server = await make_server(db_session, test_user.id)
     project = await seed_project(db_session, test_user.id, server)  # never_started
 
     body = (await client.delete(f"/api/projects/{project.id}")).json()
-    assert _steps_by_name(body)["stop_containers"]["status"] == "skipped"
+    assert _steps_by_name(body)["remove_docker_artifacts"]["status"] == "completed"
 
 
-async def test_never_cloned_skips_clone_and_containers(
+async def test_never_cloned_skips_clone_and_docker_artifacts(
     client, delete_env, db_session, test_user
 ):
+    # clone_path is NOT NULL in the schema (a planned path set at create time),
+    # so cloned_at is the real "was it ever cloned" signal.
     server = await make_server(db_session, test_user.id)
     project = await seed_project(db_session, test_user.id, server)
     project.cloned_at = None
@@ -183,7 +206,8 @@ async def test_never_cloned_skips_clone_and_containers(
 
     body = (await client.delete(f"/api/projects/{project.id}")).json()
     steps = _steps_by_name(body)
-    assert steps["stop_containers"]["status"] == "skipped"
+    assert steps["remove_docker_artifacts"]["status"] == "skipped"
+    assert steps["remove_docker_artifacts"]["detail"] == "Project was never cloned."
     assert steps["delete_clone"]["status"] == "skipped"
 
 
@@ -209,7 +233,7 @@ async def test_github_404_is_success(client, delete_env, db_session, test_user):
     "failed_step,needle",
     [
         ("unpublish", "nginx -t"),
-        ("stop_containers", "down --remove-orphans"),
+        ("remove_docker_artifacts", "down -v --rmi all --remove-orphans"),
         ("delete_clone", "rm -rf"),
         ("remove_ssh_config_block", "# BEGIN abstract project"),
         ("delete_vps_deploy_key_files", "-deploy.pub"),
