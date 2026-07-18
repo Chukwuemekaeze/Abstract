@@ -111,10 +111,13 @@ def _unpublish_command(server: Server, slug: str, domain: str) -> str:
 
 
 def _compose_down_command(clone_path: str, compose_file_path: str | None) -> str:
-    """`docker compose down --remove-orphans` in the clone dir, honoring a
-    compose file override. Two guards keep retries idempotent: the clone dir
-    must exist, and a compose file must still be present. The second guard
-    matters after a partially failed delete: a prior `rm -rf` can strip the
+    """`docker compose down -v --rmi all --remove-orphans` in the clone dir,
+    honoring a compose file override. `-v` drops the project's named volumes
+    and `--rmi all` drops its images, so deleting a project leaves no docker
+    trace on the box. Both are scoped to this compose file, never the wider
+    docker install. Two guards keep retries idempotent: the clone dir must
+    exist, and a compose file must still be present. The second guard matters
+    after a partially failed delete: a prior `rm -rf` can strip the
     (deploy-owned) compose file while leaving root-owned build artifacts, and
     `docker compose down` with no file errors out ("no configuration file
     provided") even though the containers are already gone. No file means
@@ -130,7 +133,7 @@ def _compose_down_command(clone_path: str, compose_file_path: str | None) -> str
         )
     return (
         f"if [ -d {quoted_clone} ]; then cd {quoted_clone} && "
-        f"if {file_test}; then {prefix} down --remove-orphans; fi; fi"
+        f"if {file_test}; then {prefix} down -v --rmi all --remove-orphans; fi; fi"
     )
 
 
@@ -163,7 +166,6 @@ async def delete_project(
     project_id = project.id
     slug = project.slug
     clone_path = project.clone_path
-    runtime_status = project.runtime_status
     published = project.published_at is not None
     cloned = project.cloned_at is not None
     domain = project.domain
@@ -208,24 +210,35 @@ async def delete_project(
             )
             steps.append(DeletionStepResult(name="unpublish", status="completed"))
 
-        # -- 2. stop_containers ----------------------------------------------
-        if runtime_status != "running":
+        # -- 2. remove_docker_artifacts --------------------------------------
+        # A project in `failed` status still has leftover containers, volumes,
+        # and images from the attempted start, so we gate on whether the repo
+        # was ever cloned (never cloned means docker was never touched) rather
+        # than runtime status. clone_path is a planned path set at create time
+        # and is always populated, so `cloned_at` (the `cloned` flag) is the
+        # real signal, same as delete_clone below. The command is idempotent,
+        # so running it against an already-clean box is a safe no-op.
+        if not cloned:
             steps.append(
                 DeletionStepResult(
-                    name="stop_containers",
+                    name="remove_docker_artifacts",
                     status="skipped",
-                    detail="Project is not running.",
+                    detail="Project was never cloned.",
                 )
             )
         else:
             await _run_step(
                 conn,
-                "stop_containers",
+                "remove_docker_artifacts",
                 _compose_down_command(clone_path, compose_file_path),
                 timeout=_TIMEOUT_COMPOSE_DOWN,
             )
             steps.append(
-                DeletionStepResult(name="stop_containers", status="completed")
+                DeletionStepResult(
+                    name="remove_docker_artifacts",
+                    status="completed",
+                    detail="Removed containers, volumes, and images.",
+                )
             )
 
         # -- 3. delete_clone --------------------------------------------------
