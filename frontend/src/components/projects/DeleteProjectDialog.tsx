@@ -29,7 +29,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 const DELETION_TARGETS = [
-  'Running containers (docker compose down)',
+  'Containers, images, and named volumes will be removed (docker compose down -v --rmi all)',
   'The clone directory on the server',
   'The HTTPS certificate and nginx site config',
   'The GitHub deploy key',
@@ -40,7 +40,7 @@ const DELETION_TARGETS = [
 const STEP_LABELS: Record<string, string> = {
   connect_ssh: 'Connect to the server',
   unpublish: 'Remove domain, certificate, and nginx config',
-  stop_containers: 'Stop and remove containers',
+  remove_docker_artifacts: 'Remove containers, images, and volumes',
   delete_clone: 'Delete the clone directory',
   remove_ssh_config_block: 'Remove the SSH config entry',
   delete_vps_deploy_key_files: 'Delete the deploy key files',
@@ -116,6 +116,10 @@ function DeleteDialogOpen({
                   <li key={target}>{target}</li>
                 ))}
               </ul>
+              <p className="mt-2 text-muted-foreground">
+                This includes application data stored in docker named volumes,
+                such as databases, uploads, and caches. This cannot be undone.
+              </p>
             </div>
 
             <div className="flex flex-col gap-1.5">
