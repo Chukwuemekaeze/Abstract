@@ -249,7 +249,7 @@ class SSHService:
             _connection_pool.pop(pool_key, None)
 
         key_bytes = await self._load_private_key(
-            user_id, session_id, redis, db, key_provider
+            server, session_id, redis, db, key_provider
         )
         known_hosts = _known_hosts_for(server)
 
@@ -301,7 +301,7 @@ class SSHService:
         """
         try:
             key_bytes = await self._load_private_key(
-                user_id, session_id, redis, db, key_provider
+                server, session_id, redis, db, key_provider
             )
             known_hosts = _known_hosts_for(server)
             async with asyncssh.connect(
@@ -338,27 +338,25 @@ class SSHService:
 
     async def _load_private_key(
         self,
-        user_id: UUID,
+        server: Server,
         session_id: str,
         redis: aioredis.Redis,
         db: AsyncSession,
         key_provider: KeyProvider,
     ) -> bytes:
-        # Scoped per Clerk login. Signing out and back in yields a new session id and
-        # a fresh cache entry.
-        cache_key = f"ssh_key:{user_id}:{session_id}"
+        # Keyed per server (each server has its own keypair) and per Clerk login.
+        # Signing out and back in yields a new session id and a fresh cache entry.
+        cache_key = f"ssh_key:{server.id}:{session_id}"
         cached = await redis.get(cache_key)
         if cached is not None:
             return cached
 
         app_key = await db.scalar(
-            select(AppSshKey)
-            .where(AppSshKey.user_id == user_id)
-            .order_by(AppSshKey.created_at.desc())
+            select(AppSshKey).where(AppSshKey.server_id == server.id)
         )
         if app_key is None:
             raise ProbeError(
-                "No app SSH key found for this user. Register a server first."
+                "No app SSH key found for this server. Register it first."
             )
         private_bytes = await key_provider.decrypt(app_key.encrypted_private_key)
         await redis.set(

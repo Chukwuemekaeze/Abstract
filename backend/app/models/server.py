@@ -1,6 +1,7 @@
 """Server model. A registered VPS the user wants to deploy to."""
 
 from datetime import datetime
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
 from sqlalchemy import (
@@ -16,9 +17,12 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+if TYPE_CHECKING:
+    from app.models.app_ssh_key import AppSshKey
 
 SERVER_STATUSES = ("pending_verification", "verified", "key_mismatch")
 
@@ -95,4 +99,10 @@ class Server(Base):
     )
     last_system_update_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # The app managed keypair scoped to this server. Deleting the server cascades to
+    # the key row (see AppSshKey for the authorized_keys removal ordering constraint).
+    app_ssh_key: Mapped[Optional["AppSshKey"]] = relationship(
+        back_populates="server", uselist=False, cascade="all, delete-orphan"
     )

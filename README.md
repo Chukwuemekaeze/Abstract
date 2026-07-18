@@ -354,15 +354,22 @@ A KMS backed provider can be added later behind the same interface without touch
 call sites; `encryption_key_id` is stored on each key row so re-encryption is
 possible.
 
-### Redis cache lifecycle
+### One app key per server
+
+Each server gets its own freshly generated ed25519 keypair, created during probe and
+tied to the server row by a unique `server_id` (deleting the server cascades the key).
+This limits blast radius: a compromised key only exposes the single server it was
+installed on, never the user's other servers. The public key carries an
+`abstract-server-<id8>` comment so a user can trace a line in their VPS
+`authorized_keys` back to a specific Abstract server.
 
 To open a key based connection Abstract needs the decrypted app private key.
 Decrypting on every request is wasteful, so after the first decrypt the plaintext key
-is cached in Redis under `ssh_key:{user_id}:{session_id}` with a TTL, where
-`session_id` is the Clerk session id so the cache is scoped per login. Because that
-plaintext is sensitive, the dev Redis container runs with `--appendonly no --save ""`
-and no volume: nothing is ever written to disk and the cache does not survive a
-restart.
+is cached in Redis under `ssh_key:{server_id}:{session_id}` with a TTL, where
+`server_id` scopes the cache to the one server that key belongs to and `session_id`
+is the Clerk session id so it is also scoped per login. Because that plaintext is
+sensitive, the dev Redis container runs with `--appendonly no --save ""` and no
+volume: nothing is ever written to disk and the cache does not survive a restart.
 
 ### The `_from_client` convention
 
@@ -374,8 +381,9 @@ server controlled value is required.
 ### user_id is never from the client
 
 User identity always comes from the authenticated session (`current_user.id`), never
-from request input. Every database filter and every Redis key is scoped by that
-server side id. Identity enters the system only through the Clerk session token,
+from request input. Every database filter and Redis key is scoped by a server side id
+(the user id, or a server id first resolved through an owned server), never by a
+client supplied value. Identity enters the system only through the Clerk session token,
 verified by the backend; the `sub` (Clerk user id) and `sid` (session id) claims are
 read only after signature verification, so they are trusted credentials rather than
 client input.

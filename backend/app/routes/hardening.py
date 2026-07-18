@@ -16,7 +16,6 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
@@ -27,13 +26,14 @@ from app.deps.services import (
     get_key_provider_dep,
     get_ssh_service,
 )
-from app.models import AppSshKey, Server, User
+from app.models import Server, User
 from app.redis_client import get_redis
 from app.schemas.servers import (
     CreateSudoUserRequest,
     QuickHardenRequest,
     ServerResponse,
 )
+from app.services.app_key_service import AppKeyMissing, get_key_for_server
 from app.services.hardening_service import (
     HardeningContext,
     HardeningError,
@@ -54,24 +54,24 @@ def _require_verified(server: Server) -> None:
 
 
 async def _build_context(
+    server: Server,
     current_user: User,
     session_id: str,
     redis: aioredis.Redis,
     key_provider: KeyProvider,
     db: AsyncSession,
 ) -> HardeningContext:
-    """Load and decrypt the user's app keypair into a HardeningContext.
+    """Load and decrypt this server's app keypair into a HardeningContext.
 
     The keypair is needed both to authenticate to the server and to open the
     verification sub-connections in create_sudo_user / disable_root_login.
     """
-    app_key = await db.scalar(
-        select(AppSshKey)
-        .where(AppSshKey.user_id == current_user.id)
-        .order_by(AppSshKey.created_at.desc())
-    )
-    if app_key is None:
-        raise HTTPException(500, "App SSH key missing. Register a server first.")
+    try:
+        app_key = await get_key_for_server(server, db)
+    except AppKeyMissing as exc:
+        raise HTTPException(
+            500, "App SSH key missing. Register a server first."
+        ) from exc
     app_private_key = await key_provider.decrypt(app_key.encrypted_private_key)
     return HardeningContext(
         user_id=current_user.id,
@@ -210,7 +210,9 @@ async def create_sudo_user(
 ) -> ServerResponse:
     _require_verified(server)
     sudo_user_name_from_client = body.sudo_user_name
-    ctx = await _build_context(current_user, session_id, redis, key_provider, db)
+    ctx = await _build_context(
+        server, current_user, session_id, redis, key_provider, db
+    )
     async with _atomic(db, server):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
@@ -238,7 +240,9 @@ async def disable_root_login(
         raise HTTPException(
             400, "Create a sudo user before disabling root login."
         )
-    ctx = await _build_context(current_user, session_id, redis, key_provider, db)
+    ctx = await _build_context(
+        server, current_user, session_id, redis, key_provider, db
+    )
     async with _atomic(db, server):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
@@ -319,7 +323,9 @@ async def reboot(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    ctx = await _build_context(current_user, session_id, redis, key_provider, db)
+    ctx = await _build_context(
+        server, current_user, session_id, redis, key_provider, db
+    )
     async with _atomic(db, server):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
@@ -341,7 +347,9 @@ async def quick_harden(
 ) -> ServerResponse:
     _require_verified(server)
     sudo_user_name_from_client = body.sudo_user_name
-    ctx = await _build_context(current_user, session_id, redis, key_provider, db)
+    ctx = await _build_context(
+        server, current_user, session_id, redis, key_provider, db
+    )
     async with _atomic(db, server):
         await hardening.quick_harden(server, db, ctx, sudo_user_name_from_client)
     return ServerResponse.model_validate(server)

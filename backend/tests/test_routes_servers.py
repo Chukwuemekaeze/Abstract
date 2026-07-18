@@ -51,6 +51,35 @@ async def test_probe_install_smoke_flow(client, mock_ssh, db_session, test_user)
     mock_ssh.run_command.assert_awaited_once()
 
 
+async def test_install_key_uses_the_servers_own_key(
+    client, mock_ssh, db_session, test_user
+):
+    # Register two servers. Each probe generates a distinct per-server keypair.
+    probe_a = (
+        await client.post(
+            "/api/servers/probe",
+            json={"name": "a", "host": "203.0.113.10"},
+        )
+    ).json()
+    probe_b = (
+        await client.post(
+            "/api/servers/probe",
+            json={"name": "b", "host": "203.0.113.11"},
+        )
+    ).json()
+    assert probe_a["app_public_key"] != probe_b["app_public_key"]
+
+    # Installing server B must use server B's key, not server A's.
+    resp = await client.post(
+        f"/api/servers/{probe_b['server_id']}/install_key",
+        json={"password": "hunter2", "disable_password_auth": False},
+    )
+    assert resp.status_code == 200, resp.text
+    _args, kwargs = mock_ssh.install_key.call_args
+    assert kwargs["app_public_key"] == probe_b["app_public_key"]
+    assert kwargs["app_public_key"] != probe_a["app_public_key"]
+
+
 async def test_list_returns_only_current_user_servers(client, mock_ssh, db_session, test_user):
     await client.post(
         "/api/servers/probe",

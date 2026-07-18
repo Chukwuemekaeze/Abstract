@@ -19,7 +19,7 @@ from app.db import get_db
 from app.deps.auth import get_current_session_id, get_current_user
 from app.deps.server_ownership import get_owned_server
 from app.deps.services import get_key_provider_dep, get_ssh_service
-from app.models import AppSshKey, Server, User
+from app.models import Server, User
 from app.redis_client import get_redis
 from app.schemas.servers import (
     CommandResultResponse,
@@ -28,7 +28,11 @@ from app.schemas.servers import (
     ProbeResponse,
     ServerResponse,
 )
-from app.services.app_key_service import ensure_app_key_for_user
+from app.services.app_key_service import (
+    AppKeyMissing,
+    create_key_for_server,
+    get_key_for_server,
+)
 from app.services.key_provider import KeyProvider
 from app.services.ssh_service import (
     HostKeyChangedDuringInstall,
@@ -54,8 +58,8 @@ async def probe_server(
 
     Opens an unauthenticated probe to the host, records the presented host key and
     its SHA256 fingerprint, and creates a server row in status pending_verification
-    owned by the current user. Also lazily ensures the user has an app managed
-    keypair. Returns the new server id, the fingerprint for the user to compare
+    owned by the current user. Generates a fresh app managed keypair scoped to this
+    server. Returns the new server id, the fingerprint for the user to compare
     against their VPS console, and the app public key to be installed next.
     """
     name_from_client = body.name
@@ -86,7 +90,11 @@ async def probe_server(
     await db.commit()
     await db.refresh(server)
 
-    app_key = await ensure_app_key_for_user(current_user.id, db, key_provider)
+    # Fresh keypair scoped to this server. The service does not commit, so the route
+    # owns the transaction for the key row.
+    app_key = await create_key_for_server(server, db, key_provider)
+    await db.commit()
+    await db.refresh(app_key)
 
     return ProbeResponse(
         server_id=server.id,
@@ -122,13 +130,10 @@ async def install_key(
             f"Server is not pending verification (status: {server.status}).",
         )
 
-    app_key = await db.scalar(
-        select(AppSshKey)
-        .where(AppSshKey.user_id == current_user.id)
-        .order_by(AppSshKey.created_at.desc())
-    )
-    if app_key is None:
-        raise HTTPException(500, "App SSH key missing. Re-run the probe step.")
+    try:
+        app_key = await get_key_for_server(server, db)
+    except AppKeyMissing as exc:
+        raise HTTPException(500, "App SSH key missing. Re-run the probe step.") from exc
 
     app_private_key = await key_provider.decrypt(app_key.encrypted_private_key)
 
