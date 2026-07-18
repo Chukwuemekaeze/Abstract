@@ -8,7 +8,6 @@ against a real Postgres transaction.
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -50,24 +49,6 @@ def harden_env(mocker):
     app.dependency_overrides.pop(get_hardening_service, None)
 
 
-@pytest_asyncio.fixture
-async def app_key(db_session, test_user):
-    """Seed the user's app keypair so context-building endpoints can decrypt it."""
-    provider = get_key_provider(get_settings())
-    encrypted = await provider.encrypt(b"PRIVATEKEYBYTES")
-    row = AppSshKey(
-        user_id=test_user.id,
-        public_key="ssh-ed25519 AAAAAPPKEY app-deploy-x",
-        encrypted_private_key=encrypted,
-        key_type="ssh-ed25519",
-        encryption_key_id=provider.key_id,
-    )
-    db_session.add(row)
-    await db_session.commit()
-    await db_session.refresh(row)
-    return row
-
-
 async def _make_server(db_session, user_id, *, status="verified", sudo_user_name=None):
     server = Server(
         user_id=user_id,
@@ -82,6 +63,20 @@ async def _make_server(db_session, user_id, *, status="verified", sudo_user_name
     db_session.add(server)
     await db_session.commit()
     await db_session.refresh(server)
+
+    # Every registered server has its own app keypair (created during probe). Seed one
+    # so context-building endpoints can look it up by server_id and decrypt it.
+    provider = get_key_provider(get_settings())
+    encrypted = await provider.encrypt(b"PRIVATEKEYBYTES")
+    key = AppSshKey(
+        server_id=server.id,
+        public_key=f"ssh-ed25519 AAAAAPPKEY abstract-server-{server.id.hex[:8]}",
+        encrypted_private_key=encrypted,
+        key_type="ssh-ed25519",
+        encryption_key_id=provider.key_id,
+    )
+    db_session.add(key)
+    await db_session.commit()
     return server
 
 
@@ -183,7 +178,7 @@ async def test_install_nginx_failure_returns_output_and_rolls_back(
 
 
 async def test_quick_harden_happy_updates_all_fields(
-    client, harden_env, db_session, test_user, app_key
+    client, harden_env, db_session, test_user
 ):
     _ssh, hardening = harden_env
     server = await _make_server(db_session, test_user.id)
@@ -215,7 +210,7 @@ async def test_quick_harden_happy_updates_all_fields(
 
 
 async def test_quick_harden_failure_rolls_back_all_state(
-    client, harden_env, db_session, test_user, app_key
+    client, harden_env, db_session, test_user
 ):
     _ssh, hardening = harden_env
     server = await _make_server(db_session, test_user.id)

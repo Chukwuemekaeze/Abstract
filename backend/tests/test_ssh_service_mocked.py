@@ -240,7 +240,7 @@ async def test_get_connection_cache_miss_then_hit(mocker):
     assert c1 is conn
     assert connect_mock.call_count == 1
     assert db.scalar.call_count == 1
-    assert await redis.get(f"ssh_key:{user_id}:{session_id}") == b"PRIVATEKEYBYTES"
+    assert await redis.get(f"ssh_key:{server.id}:{session_id}") == b"PRIVATEKEYBYTES"
 
     # Cache hit: pooled connection reused, no new connect, no new db lookup.
     c2 = await service.get_connection(server, user_id, session_id, redis, db, provider)
