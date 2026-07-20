@@ -138,15 +138,23 @@ export function useInstallKeyMutation() {
   })
 }
 
-// Abort a still pending server (deletes the row). Invalidates the list.
-export function useCancelServerMutation() {
+// Explicitly cancel a still-pending registration. The backend first strips
+// Abstract's key off the VPS when it was already installed (a partial install),
+// then deletes the row, returning the ordered step list. On a cleanup failure it
+// returns a structured 502 and keeps the row (see extractServerDeletionError).
+// Invalidates the list and this server's detail.
+export function useCancelServerMutation(serverId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (serverId: string): Promise<void> => {
-      await apiClient.post(`/servers/${serverId}/cancel`)
+    mutationFn: async (): Promise<DeleteServerResponse> => {
+      const { data } = await apiClient.post<DeleteServerResponse>(
+        `/servers/${serverId}/cancel`,
+      )
+      return data
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: serverKeys.all })
+      qc.invalidateQueries({ queryKey: serverKeys.detail(serverId) })
     },
   })
 }
