@@ -14,7 +14,11 @@ from app.config import get_settings
 from app.deps.services import get_hardening_service, get_ssh_service
 from app.main import app
 from app.models import AppSshKey, Server
-from app.services.hardening_service import HardeningError, NginxInstallFailed
+from app.services.hardening_service import (
+    HardeningError,
+    NginxInstallFailed,
+    SudoUserAlreadyExists,
+)
 from app.services.key_provider import get_key_provider
 from tests.conftest import requires_db
 
@@ -175,6 +179,38 @@ async def test_install_nginx_failure_returns_output_and_rolls_back(
     # Transaction rolled back: the flag never persisted.
     row = await db_session.scalar(select(Server).where(Server.id == server_id))
     assert row.nginx_installed is False
+
+
+async def test_create_sudo_user_conflict_returns_409(
+    client, harden_env, db_session, test_user
+):
+    # A pre-existing (or racing) username surfaces as a clean, actionable 409, and no
+    # DB identity/state change persists. The route maps both the preflight and the
+    # adduser-race conflict to this same response.
+    _ssh, hardening = harden_env
+    server = await _make_server(db_session, test_user.id)
+    server_id = server.id
+
+    async def conflicting_create(conn, srv, db, ctx, name):
+        raise SudoUserAlreadyExists(name)
+
+    hardening.create_sudo_user.side_effect = conflicting_create
+
+    resp = await client.post(
+        f"/api/servers/{server_id}/harden/create_sudo_user",
+        json={"sudo_user_name": "deploy"},
+    )
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail == (
+        "An account named 'deploy' already exists on this server. "
+        "Choose a different username."
+    )
+
+    # No DB identity/state change on the conflict.
+    row = await db_session.scalar(select(Server).where(Server.id == server_id))
+    assert row.sudo_user_name is None
+    assert row.username == "root"
 
 
 async def test_quick_harden_happy_updates_all_fields(
