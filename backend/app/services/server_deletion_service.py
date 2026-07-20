@@ -50,6 +50,7 @@ from app.services.ssh_service import SSHService
 __all__ = [
     "ServerDeletionError",
     "ServerOperationInFlight",
+    "cancel_registration",
     "delete_server",
 ]
 
@@ -441,6 +442,163 @@ async def delete_server(
             failed_step=exc.step,
             steps=steps,
             message=f"Deletion failed at step '{exc.step}'.",
+        ) from exc
+
+    return steps
+
+
+async def cancel_registration(
+    *,
+    server: Server,
+    current_user: User,
+    session_id: str,
+    db: AsyncSession,
+    ssh: SSHService,
+    redis: aioredis.Redis,
+    key_provider: KeyProvider,
+) -> list[ServerDeletionStepResult]:
+    """Cancel a still-pending server registration.
+
+    A lighter cousin of delete_server: a pending server has no projects and no sudo
+    user, so there is no per-project loop and no sudoers to revoke.
+
+    If Abstract's key was never written to the box (key_installed is false, the
+    common case where the user just probed and walked away), this only deletes the
+    row. If the key was (possibly partially) installed, it first strips the key off
+    the VPS over the app key connection — re-enabling password auth first when
+    install had disabled it, so the user is not locked out — then deletes the row.
+
+    On any VPS step failure the row is left intact and ServerDeletionError is raised
+    with the ordered step list, so the caller returns a structured 502 and the user
+    can retry once the box is reachable again. We never delete the row while the key
+    might still be on the server: that would silently claim a cleanup that did not
+    happen.
+    """
+    server_id = server.id
+
+    # Reload with the app key so the authorized_keys removal has the public key.
+    server = await db.scalar(
+        select(Server)
+        .options(selectinload(Server.app_ssh_key))
+        .where(Server.id == server_id)
+    )
+    assert server is not None
+
+    steps: list[ServerDeletionStepResult] = []
+
+    async def _delete_row() -> None:
+        try:
+            row = await db.get(Server, server_id)
+            if row is not None:
+                await db.delete(row)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            raise _StepFailed(
+                "delete_server_record",
+                f"Could not delete the server record: {exc}",
+            ) from exc
+        steps.append(
+            ServerDeletionStepResult(name="delete_server_record", status="completed")
+        )
+
+    try:
+        # Fast path: the key never landed on the box, so there is nothing to clean up.
+        if not server.key_installed:
+            await _delete_row()
+            return steps
+
+        # The key is on the box, so key based login works. Open the pooled connection.
+        try:
+            conn = await ssh.get_connection(
+                server, current_user.id, session_id, redis, db, key_provider
+            )
+        except Exception as exc:
+            raise _StepFailed(
+                "connect_ssh", f"Could not connect to the server: {exc}"
+            ) from exc
+
+        # -- restore_ssh_access ----------------------------------------------
+        # Only needed when install got as far as disabling password auth: removing
+        # the key without re-enabling password login would lock the user out. Same
+        # idempotent sshd_config path delete_server uses.
+        if server.password_auth_disabled:
+
+            async def _sshd_run(script: str) -> asyncssh.SSHCompletedProcess:
+                cmd = f"{_priv(server)}sh -c {shlex.quote(script)}"
+                return await _run_step(conn, "restore_ssh_access", cmd)
+
+            outcome = await apply_sshd_directive(
+                _sshd_run,
+                directive="PasswordAuthentication",
+                value="yes",
+                value_alternatives="yes|no",
+            )
+            if outcome is SshdDirectiveResult.MISMATCH:
+                raise _StepFailed(
+                    "restore_ssh_access",
+                    "sshd still does not report PasswordAuthentication yes after "
+                    "the edit.",
+                )
+            steps.append(
+                ServerDeletionStepResult(name="restore_ssh_access", status="completed")
+            )
+        else:
+            steps.append(
+                ServerDeletionStepResult(
+                    name="restore_ssh_access",
+                    status="skipped",
+                    detail="Password authentication was never disabled.",
+                )
+            )
+
+        # -- remove_authorized_key -------------------------------------------
+        blob = (
+            _authorized_key_blob(server.app_ssh_key.public_key)
+            if server.app_ssh_key
+            else None
+        )
+        if blob is None:
+            steps.append(
+                ServerDeletionStepResult(
+                    name="remove_authorized_key",
+                    status="skipped",
+                    detail="No app SSH key on record for this server.",
+                )
+            )
+        else:
+            await _run_step(
+                conn,
+                "remove_authorized_key",
+                _remove_authorized_key_command(blob),
+            )
+            steps.append(
+                ServerDeletionStepResult(name="remove_authorized_key", status="completed")
+            )
+
+        # -- evict_ssh_connection --------------------------------------------
+        ssh.evict_connection(current_user.id, server_id)
+        steps.append(
+            ServerDeletionStepResult(name="evict_ssh_connection", status="completed")
+        )
+
+        # -- delete_server_record --------------------------------------------
+        await _delete_row()
+    except _StepFailed as exc:
+        steps.append(
+            ServerDeletionStepResult(name=exc.step, status="failed", detail=exc.detail)
+        )
+        await db.rollback()
+        logger.warning(
+            "Registration cancel aborted at step {} for server {}: {}",
+            exc.step,
+            server_id,
+            exc.detail,
+        )
+        raise ServerDeletionError(
+            failed_step=exc.step,
+            steps=steps,
+            message=f"Cancellation failed at step '{exc.step}'.",
         ) from exc
 
     return steps

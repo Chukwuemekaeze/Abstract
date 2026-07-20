@@ -96,11 +96,12 @@ export function AddServerDialog() {
     }
   }
 
-  // From the failed step, retry from the form (the pending row, if any, can be
-  // re-driven; the user re-enters the password which we never persist).
+  // From the failed step, retry. If the probe already created a pending row, go back
+  // to fingerprint confirmation and re-run the install (re-probing from the form would
+  // create a second pending row). Only a failure before any probe returns to the form.
   const handleRetry = () => {
     setError(null)
-    setStep('form')
+    setStep(pendingServer ? 'awaiting_confirmation' : 'form')
   }
 
   // Only allow closing via the controlled handler so state always resets.
@@ -170,29 +171,6 @@ export function AddServerDialog() {
                 />
               </div>
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ password: e.target.value })}
-                placeholder="Used once to install the key, never stored"
-                required
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="disable_password_auth"
-                checked={formData.disable_password_auth}
-                onCheckedChange={(checked) =>
-                  setFormData({ disable_password_auth: checked === true })
-                }
-              />
-              <Label htmlFor="disable_password_auth" className="font-normal">
-                Disable password authentication after install (recommended)
-              </Label>
-            </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={close}>
                 Cancel
@@ -210,13 +188,41 @@ export function AddServerDialog() {
           </div>
         )}
 
-        {/* Step: awaiting_confirmation */}
+        {/* Step: awaiting_confirmation. The password is collected here, right before
+            it is used, so the same step serves a fresh registration and a resumed one
+            (where the form/probe were already done). It is never persisted. */}
         {step === 'awaiting_confirmation' && pendingServer && (
           <FingerprintConfirm
             fingerprint={pendingServer.fingerprint}
             onConfirm={handleInstall}
             onCancel={close}
-          />
+            busy={!formData.password}
+          >
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ password: e.target.value })}
+                placeholder="Used once to install the key, never stored"
+                autoComplete="off"
+                required
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="disable_password_auth"
+                checked={formData.disable_password_auth}
+                onCheckedChange={(checked) =>
+                  setFormData({ disable_password_auth: checked === true })
+                }
+              />
+              <Label htmlFor="disable_password_auth" className="font-normal">
+                Disable password authentication after install (recommended)
+              </Label>
+            </div>
+          </FingerprintConfirm>
         )}
 
         {/* Step: installing */}

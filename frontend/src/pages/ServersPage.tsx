@@ -4,6 +4,7 @@
 import { AddServerDialog } from '@/components/AddServerDialog'
 import { Header } from '@/components/Header'
 import { ServerList } from '@/components/ServerList'
+import { CancelRegistrationDialog } from '@/components/servers/CancelRegistrationDialog'
 import { Button } from '@/components/ui/button'
 import { useAddServerStore } from '@/store/addServerStore'
 
@@ -26,6 +27,7 @@ export function ServersPage() {
 
         <ServerList />
         <AddServerDialog />
+        <CancelRegistrationDialog />
       </div>
     </>
   )

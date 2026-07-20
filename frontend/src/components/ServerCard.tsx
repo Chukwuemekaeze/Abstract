@@ -24,6 +24,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { useAddServerStore } from '@/store/addServerStore'
+import { useCancelRegistrationDialogStore } from '@/store/cancel-registration-dialog'
 
 // Map each status to a badge variant and label. key_mismatch is the alarming one.
 const STATUS_META: Record<
@@ -46,6 +48,11 @@ export function ServerCard({ server }: { server: Server }) {
 
   const smokeTest = useSmokeTestMutation()
   const status = STATUS_META[server.status]
+  const isPending = server.status === 'pending_verification'
+
+  // Resume/cancel drive the same global dialogs used elsewhere.
+  const resumeRegistration = useAddServerStore((s) => s.resume)
+  const openCancelRegistration = useCancelRegistrationDialogStore((s) => s.openWith)
 
   const runSmokeTest = async () => {
     setSmokeResult(null)
@@ -90,21 +97,43 @@ export function ServerCard({ server }: { server: Server }) {
           {fingerprintDisplay}
         </button>
 
-        <div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={runSmokeTest}
-            // Smoke test only makes sense once the server is verified.
-            disabled={server.status !== 'verified' || smokeTest.isPending}
-          >
-            {smokeTest.isPending && (
-              <Loader2 className="mr-2 size-4 animate-spin" />
-            )}
-            Run smoke test
-          </Button>
-        </div>
+        {/* Pending registrations get resume/cancel actions instead of the smoke
+            test, which only makes sense once the server is verified. */}
+        {isPending ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => resumeRegistration(server)}
+            >
+              Continue registration
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => openCancelRegistration(server.id)}
+            >
+              Cancel registration
+            </Button>
+          </div>
+        ) : (
+          <div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={runSmokeTest}
+              // Smoke test only makes sense once the server is verified.
+              disabled={server.status !== 'verified' || smokeTest.isPending}
+            >
+              {smokeTest.isPending && (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              )}
+              Run smoke test
+            </Button>
+          </div>
+        )}
 
         {/* Inline output of the last smoke test run. */}
         {smokeResult && (

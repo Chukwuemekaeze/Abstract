@@ -3,7 +3,7 @@
 // VPS provider console shows. Confirming means "yes this is really my server",
 // which is what authorizes installing the app key over the password session.
 
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -14,6 +14,9 @@ interface FingerprintConfirmProps {
   onConfirm: () => void
   onCancel: () => void
   busy?: boolean
+  // Extra content (e.g. the password field) rendered between the fingerprint box
+  // and the confirm/cancel buttons.
+  children?: ReactNode
 }
 
 export function FingerprintConfirm({
@@ -21,6 +24,7 @@ export function FingerprintConfirm({
   onConfirm,
   onCancel,
   busy = false,
+  children,
 }: FingerprintConfirmProps) {
   // Local, transient "copied" state just to flip the button icon for feedback.
   const [copied, setCopied] = useState(false)
@@ -55,8 +59,10 @@ export function FingerprintConfirm({
         </Button>
       </div>
 
+      {children}
+
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
+        <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>
         <Button type="button" onClick={onConfirm} disabled={busy}>

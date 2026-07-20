@@ -11,6 +11,8 @@ import { ArrowLeft, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { apiClient, extractHardeningError } from '@/api/client'
+import { AddServerDialog } from '@/components/AddServerDialog'
+import { CancelRegistrationDialog } from '@/components/servers/CancelRegistrationDialog'
 import {
   type Server,
   type ServerStatus,
@@ -41,6 +43,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useAddServerStore } from '@/store/addServerStore'
+import { useCancelRegistrationDialogStore } from '@/store/cancel-registration-dialog'
 import { useNewProjectStore } from '@/store/newProjectStore'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
 
@@ -79,9 +83,73 @@ export function ServerDetailPage() {
           </div>
         )}
         {isError && <p className="text-destructive">Could not load this server.</p>}
-        {server && <ServerDetail server={server} />}
+        {server &&
+          (server.status === 'pending_verification' ? (
+            <PendingServerDetail server={server} />
+          ) : (
+            <ServerDetail server={server} />
+          ))}
       </div>
     </>
+  )
+}
+
+// A pending registration is not a working server yet: no hardening, no projects. It
+// shows the identity and the two ways forward — resume the registration (reopens the
+// dialog at the fingerprint step, asking for the password again) or cancel it.
+function PendingServerDetail({ server }: { server: Server }) {
+  const [showFullFingerprint, setShowFullFingerprint] = useState(false)
+  const resumeRegistration = useAddServerStore((s) => s.resume)
+  const openCancelRegistration = useCancelRegistrationDialogStore((s) => s.openWith)
+
+  const status = STATUS_META[server.status]
+  const fingerprint = server.fingerprint_sha256 ?? 'unknown'
+  const fingerprintDisplay =
+    showFullFingerprint || fingerprint.length <= 24
+      ? fingerprint
+      : `${fingerprint.slice(0, 24)}...`
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold">{server.name}</h1>
+          <Badge className={status.className}>{status.label}</Badge>
+        </div>
+        <p className="text-muted-foreground text-sm">
+          {server.username}@{server.host}:{server.port}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowFullFingerprint((v) => !v)}
+          className="mt-2 text-left font-mono text-xs text-muted-foreground hover:text-foreground"
+          title="Click to expand or collapse"
+        >
+          {fingerprintDisplay}
+        </button>
+      </div>
+
+      <Alert>
+        <AlertTitle>Registration not finished</AlertTitle>
+        <AlertDescription>
+          This server was registered but its key was never verified. Continue the
+          registration to confirm the host key fingerprint and install the deploy key,
+          or cancel it to remove the pending record.
+        </AlertDescription>
+      </Alert>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => resumeRegistration(server)}>
+          Continue registration
+        </Button>
+        <Button variant="outline" onClick={() => openCancelRegistration(server.id)}>
+          Cancel registration
+        </Button>
+      </div>
+
+      <AddServerDialog />
+      <CancelRegistrationDialog />
+    </div>
   )
 }
 

@@ -48,6 +48,17 @@ const initialFormData: AddServerFormData = {
   disable_password_auth: true,
 }
 
+// The subset of a persisted server we need to resume its registration. Matches the
+// fields the servers list/detail already have on hand (see api/servers Server).
+export interface ResumableServer {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  fingerprint_sha256: string | null
+}
+
 interface AddServerState {
   step: AddServerStep
   formData: AddServerFormData
@@ -57,6 +68,11 @@ interface AddServerState {
   // Open the dialog at the form step. Close and reset everything.
   open: () => void
   close: () => void
+
+  // Resume a still-pending registration: skip the form/probe and jump straight to
+  // fingerprint confirmation with the connection details prefilled. The password is
+  // deliberately left blank so the user re-enters it (we never persist it).
+  resume: (server: ResumableServer) => void
 
   // Granular setters used by the dialog as it walks through the flow.
   setFormData: (patch: Partial<AddServerFormData>) => void
@@ -73,12 +89,35 @@ export const useAddServerStore = create<AddServerState>((set) => ({
   error: null,
 
   open: () => set({ step: 'form', error: null }),
-  // Closing fully resets so the next open starts clean.
+  // Closing fully resets so the next open starts clean. It never touches the pending
+  // row on the backend: dismissing the dialog leaves the registration intact, and
+  // only the explicit "Cancel registration" action deletes it.
   close: () =>
     set({
       step: 'idle',
       formData: initialFormData,
       pendingServer: null,
+      error: null,
+    }),
+
+  resume: (server) =>
+    set({
+      step: 'awaiting_confirmation',
+      formData: {
+        name: server.name,
+        host: server.host,
+        port: server.port,
+        username: server.username,
+        password: '',
+        disable_password_auth: true,
+      },
+      pendingServer: {
+        id: server.id,
+        fingerprint: server.fingerprint_sha256 ?? '',
+        // Only ever displayed via the fingerprint; the install step reads the key
+        // server side, so an empty value here is fine on resume.
+        app_public_key: '',
+      },
       error: null,
     }),
 
