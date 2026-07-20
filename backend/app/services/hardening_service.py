@@ -73,6 +73,23 @@ class SudoUserVerificationFailed(HardeningError):
     pass
 
 
+class SudoUserAlreadyExists(HardeningError):
+    """The requested Linux account already exists on the target server.
+
+    A requested sudo/deploy username must be new: we never adopt, modify, or grant
+    access to a pre-existing account. `.message` is the clean, actionable string for
+    the UI (a 409); `.captured_output` keeps any raw shell output for logs.
+    """
+
+    def __init__(self, username: str, captured_output: str = "") -> None:
+        super().__init__(captured_output)
+        self.username = username
+        self.message = (
+            f"An account named '{username}' already exists on this server. "
+            "Choose a different username."
+        )
+
+
 class RootLoginDisableFailed(HardeningError):
     pass
 
@@ -153,6 +170,94 @@ class HardeningService:
         if result.exit_status not in (0, None):
             raise error_cls("\n".join(captured))
         return result
+
+    async def _run_cleanup(
+        self,
+        conn: asyncssh.SSHClientConnection,
+        server: Server,
+        script: str,
+        captured: list[str],
+    ) -> bool:
+        """Run a best-effort rollback command, returning True only on success.
+
+        A non-raising sibling of `_run`: used while unwinding a failed new-user
+        workflow, where a further exception would mask the original error. Output is
+        still appended to `captured`. A timeout, transport error, or nonzero exit is
+        reported as failure (returns False) rather than raised, so the caller can note
+        which resources may remain instead of falsely claiming a full rollback.
+        """
+        cmd = f"{self._priv(server)}sh -c {shlex.quote(script)}"
+        try:
+            result = await conn.run(cmd, check=False, timeout=TIMEOUT_SHORT)
+        except (TimeoutError, OSError, asyncssh.Error) as exc:
+            captured.append(f"$ {cmd}\n{exc}")
+            return False
+        body = f"{result.stdout or ''}{result.stderr or ''}".rstrip()
+        captured.append(f"$ {cmd}\n{body}".rstrip())
+        return result.exit_status in (0, None)
+
+    async def _assert_user_absent(
+        self,
+        conn: asyncssh.SSHClientConnection,
+        server: Server,
+        name: str,
+        captured: list[str],
+    ) -> None:
+        """Preflight: the requested account must not already exist.
+
+        `id -u` is read-only, so raising here runs no mutating command. Raises
+        SudoUserAlreadyExists (a clean 409) when the account is present, so Abstract
+        never adopts a pre-existing OS or human account.
+        """
+        check = await self._run(
+            conn,
+            server,
+            f"id -u {name} >/dev/null 2>&1 && echo exists || echo absent",
+            timeout=TIMEOUT_SHORT,
+            error_cls=SudoUserVerificationFailed,
+            captured=captured,
+        )
+        if (check.stdout or "").strip() == "exists":
+            raise SudoUserAlreadyExists(name, "\n".join(captured))
+
+    async def _rollback_new_user(
+        self,
+        conn: asyncssh.SSHClientConnection,
+        server: Server,
+        name: str,
+        *,
+        created_user: bool,
+        created_sudoers: bool,
+        captured: list[str],
+    ) -> None:
+        """Undo only the changes THIS invocation made under the new-user assumption.
+
+        Runs over the still-root connection (identity was never switched on failure).
+        Removes the Abstract-created sudoers file and, if this invocation created the
+        account, deletes it with `deluser --remove-home` -- which also removes its home
+        (including .ssh/authorized_keys) and its sudo/docker group memberships in one
+        step. A pre-existing account is never deleted, because created_user is only set
+        when our own `adduser` reported CREATED. Cleanup is best effort: any failure is
+        recorded in `captured` rather than raised, so we never falsely claim a full
+        rollback.
+        """
+        failures: list[str] = []
+        if created_sudoers:
+            if not await self._run_cleanup(
+                conn, server, f"rm -f /etc/sudoers.d/{shlex.quote(name)}", captured
+            ):
+                failures.append(f"sudoers file /etc/sudoers.d/{name}")
+        if created_user:
+            if not await self._run_cleanup(
+                conn, server, f"deluser --remove-home {shlex.quote(name)}", captured
+            ):
+                failures.append(f"user account and home directory for {name}")
+        if failures:
+            captured.append(
+                "Cleanup incomplete after failure. Abstract could not remove the "
+                "following resources it created; they may remain and need manual "
+                "removal: " + ", ".join(failures)
+            )
 
     async def _verify_user_access(
         self, server: Server, username: str, app_private_key: bytes
@@ -363,28 +468,44 @@ class HardeningService:
         name = sudo_user_name_from_client
         captured: list[str] = []
 
-        # 1. Skip user creation if the account already exists (idempotent). The
-        # script always exits 0 and reports existence via stdout, so a missing user
-        # is not treated as a command failure.
-        check = await self._run(
-            conn,
-            server,
-            f"id -u {name} >/dev/null 2>&1 && echo exists || echo absent",
-            timeout=TIMEOUT_SHORT,
-            error_cls=SudoUserVerificationFailed,
-            captured=captured,
-        )
-        user_already_exists = (check.stdout or "").strip() == "exists"
+        # 1. Preflight: the account must be new. This is read-only, so a conflict here
+        # runs no mutating command; we never adopt a pre-existing account.
+        await self._assert_user_absent(conn, server, name, captured)
 
-        if not user_already_exists:
-            await self._run(
+        # Track exactly what THIS invocation creates so a later failure rolls back only
+        # Abstract-made changes and never touches a pre-existing account.
+        created_user = False
+        created_sudoers = False
+        try:
+            # 2. Create the account (race-safe). The script always exits 0 and reports
+            # the outcome via stdout, so we inspect it instead of raising. If the
+            # account appeared between the preflight and adduser, adduser reports FAILED
+            # and a re-check finds it present -- we treat that as the same conflict and
+            # never modify or delete it (created_user stays False).
+            create = await self._run(
                 conn,
                 server,
-                f"adduser --disabled-password --gecos '' {name}",
+                f"adduser --disabled-password --gecos '' {name} "
+                "&& echo CREATED || echo FAILED",
                 timeout=TIMEOUT_SHORT,
                 error_cls=SudoUserVerificationFailed,
                 captured=captured,
             )
+            if "CREATED" not in (create.stdout or ""):
+                recheck = await self._run(
+                    conn,
+                    server,
+                    f"id -u {name} >/dev/null 2>&1 && echo exists || echo absent",
+                    timeout=TIMEOUT_SHORT,
+                    error_cls=SudoUserVerificationFailed,
+                    captured=captured,
+                )
+                if (recheck.stdout or "").strip() == "exists":
+                    raise SudoUserAlreadyExists(name, "\n".join(captured))
+                raise SudoUserVerificationFailed("\n".join(captured))
+            created_user = True
+
+            # 3. Sudo group, and Docker group when Docker is installed.
             await self._run(
                 conn,
                 server,
@@ -393,64 +514,84 @@ class HardeningService:
                 error_cls=SudoUserVerificationFailed,
                 captured=captured,
             )
+            if server.docker_installed:
+                await self._run(
+                    conn,
+                    server,
+                    f"usermod -aG docker {name}",
+                    timeout=TIMEOUT_SHORT,
+                    error_cls=SudoUserVerificationFailed,
+                    captured=captured,
+                )
 
-        # 4. Add to docker group only if Docker is installed. Re-running this method
-        # after a later Docker install retries the group add (the steps below are
-        # idempotent and adduser is skipped via the id -u check).
-        if server.docker_installed:
+            # 4. Passwordless sudo for this user (v1 simplification for automation).
+            # Mark created_sudoers before the write: `> file` creates it immediately, so
+            # a partial failure still leaves a file for rollback to remove.
+            sudoers = f"/etc/sudoers.d/{name}"
+            created_sudoers = True
             await self._run(
                 conn,
                 server,
-                f"usermod -aG docker {name}",
+                f"echo '{name} ALL=(ALL) NOPASSWD:ALL' > {sudoers} "
+                f"&& chmod 0440 {sudoers}",
                 timeout=TIMEOUT_SHORT,
                 error_cls=SudoUserVerificationFailed,
                 captured=captured,
             )
 
-        # 5. Passwordless sudo for this user (v1 simplification for automation).
-        sudoers = f"/etc/sudoers.d/{name}"
-        await self._run(
-            conn,
-            server,
-            f"echo '{name} ALL=(ALL) NOPASSWD:ALL' > {sudoers} && chmod 0440 {sudoers}",
-            timeout=TIMEOUT_SHORT,
-            error_cls=SudoUserVerificationFailed,
-            captured=captured,
-        )
-
-        # 6 + 7. Authorized key for the new user. install -d creates the dir owned by
-        # the user with mode 700; the key append is idempotent via grep -qF.
-        ssh_dir = f"/home/{name}/.ssh"
-        akf = f"{ssh_dir}/authorized_keys"
-        pub = shlex.quote(ctx.app_public_key.strip())
-        await self._run(
-            conn,
-            server,
-            f"install -d -m 700 -o {name} -g {name} {ssh_dir} && "
-            f"touch {akf} && "
-            f"(grep -qF {pub} {akf} || echo {pub} >> {akf}) && "
-            f"chmod 600 {akf} && chown {name}:{name} {akf}",
-            timeout=TIMEOUT_SHORT,
-            error_cls=SudoUserVerificationFailed,
-            captured=captured,
-        )
-
-        # 8. Confirm the new user works (shell + passwordless sudo) over a fresh
-        # connection BEFORE switching identity, so a failure here rolls back without
-        # ever losing confirmed access.
-        if not await self._verify_user_access(server, name, ctx.app_private_key):
-            captured.append(
-                f"Verification as '{name}' failed: could not confirm shell access "
-                "and passwordless sudo over a fresh connection."
+            # 5. Authorized key for the new user. install -d creates the dir owned by
+            # the user with mode 700; the key append is idempotent via grep -qF. This
+            # lives under the user's home, so rollback removes it via deluser
+            # --remove-home.
+            ssh_dir = f"/home/{name}/.ssh"
+            akf = f"{ssh_dir}/authorized_keys"
+            pub = shlex.quote(ctx.app_public_key.strip())
+            await self._run(
+                conn,
+                server,
+                f"install -d -m 700 -o {name} -g {name} {ssh_dir} && "
+                f"touch {akf} && "
+                f"(grep -qF {pub} {akf} || echo {pub} >> {akf}) && "
+                f"chmod 600 {akf} && chown {name}:{name} {akf}",
+                timeout=TIMEOUT_SHORT,
+                error_cls=SudoUserVerificationFailed,
+                captured=captured,
             )
-            raise SudoUserVerificationFailed("\n".join(captured))
 
-        # 9. Switch identity. Subsequent connections authenticate as this user.
-        server.sudo_user_name = name
-        server.username = name
+            # 6. Confirm the new user works (shell + passwordless sudo) over a fresh
+            # connection BEFORE switching identity, so a failure here rolls back without
+            # ever losing confirmed access.
+            if not await self._verify_user_access(server, name, ctx.app_private_key):
+                captured.append(
+                    f"Verification as '{name}' failed: could not confirm shell access "
+                    "and passwordless sudo over a fresh connection."
+                )
+                raise SudoUserVerificationFailed("\n".join(captured))
 
-        # 10. Drop the pooled root connection so the next op reconnects as the user.
-        self._ssh.evict_connection(ctx.user_id, server.id)
+            # 7. Success. Switch identity; subsequent connections authenticate as this
+            # user. Drop the pooled root connection so the next op reconnects as it.
+            # We only reach here -- and only touch server.* / evict -- on success, so
+            # any failure leaves username="root", sudo_user_name=None, and the pooled
+            # root connection valid (DB and pool identity stay consistent).
+            server.sudo_user_name = name
+            server.username = name
+            self._ssh.evict_connection(ctx.user_id, server.id)
+        except SudoUserAlreadyExists:
+            # Nothing of ours to undo: the account was pre-existing (a race), so we must
+            # not adopt, modify, or delete it.
+            raise
+        except HardeningError as exc:
+            # Roll back only what this invocation created, then re-raise the same error
+            # class with cleanup notes appended so the UI sees them.
+            await self._rollback_new_user(
+                conn,
+                server,
+                name,
+                created_user=created_user,
+                created_sudoers=created_sudoers,
+                captured=captured,
+            )
+            raise type(exc)("\n".join(captured)) from exc
 
     async def disable_root_login(
         self,
@@ -627,6 +768,10 @@ class HardeningService:
         conn = await self._ssh.get_connection(
             server, ctx.user_id, ctx.session_id, ctx.redis, db, ctx.key_provider
         )
+        # Preflight the sudo username before any remote change, so a conflicting name
+        # fails fast (a clean 409) instead of after the long apt/Docker/nginx work.
+        # create_sudo_user re-checks later; the extra read-only check is harmless.
+        await self._assert_user_absent(conn, server, sudo_user_name_from_client, [])
         await self.update_system(conn, server, db)
         await self.install_base_packages(conn, server, db)
         await self.install_docker(conn, server, db)

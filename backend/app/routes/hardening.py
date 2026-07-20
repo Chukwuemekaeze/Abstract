@@ -39,6 +39,7 @@ from app.services.hardening_service import (
     HardeningError,
     HardeningService,
     RootLoginPrecheckFailed,
+    SudoUserAlreadyExists,
 )
 from app.services.key_provider import KeyProvider
 from app.services.ssh_service import HostKeyMismatch, SSHService
@@ -87,15 +88,19 @@ async def _build_context(
 async def _atomic(db: AsyncSession, server: Server):
     """Wrap an operation: commit once on success, roll back and map errors otherwise.
 
-    RootLoginPrecheckFailed is a guard (400). HardeningError surfaces a generic
-    message plus the captured shell output for the UI (502). HostKeyMismatch is 409.
-    Anything else rolls back and propagates as a 500.
+    RootLoginPrecheckFailed is a guard (400). SudoUserAlreadyExists is a clean 409
+    (the requested Linux account already exists; we never adopt it). HardeningError
+    surfaces a generic message plus the captured shell output for the UI (502).
+    HostKeyMismatch is 409. Anything else rolls back and propagates as a 500.
     """
     try:
         yield
     except RootLoginPrecheckFailed as exc:
         await db.rollback()
         raise HTTPException(400, exc.captured_output) from exc
+    except SudoUserAlreadyExists as exc:
+        await db.rollback()
+        raise HTTPException(409, exc.message) from exc
     except HostKeyMismatch as exc:
         await db.rollback()
         raise HTTPException(409, str(exc)) from exc

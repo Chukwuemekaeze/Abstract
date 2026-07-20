@@ -20,6 +20,7 @@ from app.services.hardening_service import (
     PasswordAuthDisableFailed,
     RootLoginDisableFailed,
     RootLoginPrecheckFailed,
+    SudoUserAlreadyExists,
     SudoUserVerificationFailed,
     SwapConfigFailed,
     SystemUpdateFailed,
@@ -34,20 +35,46 @@ class FakeProc:
 
 
 class FakeConn:
-    """Records commands. Canned output for the detection commands. Optional failure."""
+    """Records commands. Canned output for the detection commands. Optional failure.
 
-    def __init__(self, *, user_exists=False, fail_on=None):
+    create_sudo_user now creates the account with a race-safe
+    `adduser ... && echo CREATED || echo FAILED` step and rejects a pre-existing
+    account. The knobs below drive those paths:
+      - user_exists: the preflight `id -u` reports the account already present.
+      - adduser_outcome="failed": the adduser step reports FAILED (nonzero adduser).
+      - user_exists_after_create: the post-adduser `id -u` re-check reports the account
+        present (simulates the account appearing between preflight and adduser).
+    """
+
+    def __init__(
+        self,
+        *,
+        user_exists=False,
+        fail_on=None,
+        adduser_outcome="created",
+        user_exists_after_create=False,
+    ):
         self.commands: list[str] = []
         self.user_exists = user_exists
         self.fail_on = fail_on
+        self.adduser_outcome = adduser_outcome
+        self.user_exists_after_create = user_exists_after_create
+        self._adduser_ran = False
         self.closed = False
 
     async def run(self, command, check=False, timeout=None):
         self.commands.append(command)
         if self.fail_on and self.fail_on in command:
             return FakeProc(stderr="boom", exit_status=1)
+        if "adduser --disabled-password" in command:
+            self._adduser_ran = True
+            created = self.adduser_outcome == "created"
+            return FakeProc(stdout="CREATED\n" if created else "FAILED\n")
         if "id -u" in command:
-            return FakeProc(stdout="exists\n" if self.user_exists else "absent\n")
+            present = self.user_exists or (
+                self._adduser_ran and self.user_exists_after_create
+            )
+            return FakeProc(stdout="exists\n" if present else "absent\n")
         if "docker --version" in command:
             return FakeProc(stdout="Docker version 24.0.0\n")
         if "is-active nginx" in command:
@@ -315,18 +342,51 @@ async def test_create_sudo_user_happy_switches_identity_and_evicts(mocker):
     ssh.evict_connection.assert_called_once_with(ctx.user_id, server.id)
 
 
-async def test_create_sudo_user_idempotent_when_user_exists(mocker):
-    service, _ = _service(mocker)
+async def test_create_sudo_user_conflict_when_user_exists(mocker):
+    # A pre-existing account is a hard conflict: stop before any mutation and never
+    # adopt, modify, or delete it.
+    service, ssh = _service(mocker)
     _patch_subconnection(mocker, whoami="deploy")
     conn = FakeConn(user_exists=True)
     server = FakeServer()
     ctx = _ctx(mocker)
 
-    await service.create_sudo_user(conn, server, mocker.MagicMock(), ctx, "deploy")
+    with pytest.raises(SudoUserAlreadyExists) as exc_info:
+        await service.create_sudo_user(conn, server, mocker.MagicMock(), ctx, "deploy")
+
+    assert exc_info.value.username == "deploy"
+    assert "already exists" in exc_info.value.message
+    joined = "\n".join(conn.commands)
+    # No mutating command ran -- only the read-only preflight.
+    assert "adduser" not in joined
+    assert "usermod" not in joined
+    assert "sudoers.d" not in joined
+    assert "deluser" not in joined
+    assert server.sudo_user_name is None
+    assert server.username == "root"
+    ssh.evict_connection.assert_not_called()
+
+
+async def test_create_sudo_user_adduser_race_returns_conflict(mocker):
+    # The account appears between the preflight and adduser: same clean conflict, and
+    # we must never delete an account we did not create.
+    service, ssh = _service(mocker)
+    _patch_subconnection(mocker, whoami="deploy")
+    conn = FakeConn(
+        user_exists=False, adduser_outcome="failed", user_exists_after_create=True
+    )
+    server = FakeServer()
+
+    with pytest.raises(SudoUserAlreadyExists):
+        await service.create_sudo_user(
+            conn, server, mocker.MagicMock(), _ctx(mocker), "deploy"
+        )
 
     joined = "\n".join(conn.commands)
-    assert "adduser --disabled-password" not in joined  # skipped
-    assert server.sudo_user_name == "deploy"  # still records the user
+    assert "deluser" not in joined  # never delete the pre-existing account
+    assert server.sudo_user_name is None
+    assert server.username == "root"
+    ssh.evict_connection.assert_not_called()
 
 
 async def test_create_sudo_user_adds_docker_group_when_installed(mocker):
@@ -340,7 +400,9 @@ async def test_create_sudo_user_adds_docker_group_when_installed(mocker):
     assert "usermod -aG docker deploy" in "\n".join(conn.commands)
 
 
-async def test_create_sudo_user_verification_failure_does_not_switch(mocker):
+async def test_create_sudo_user_failure_after_creation_cleans_up(mocker):
+    # Verification fails after we created the account: roll back the sudoers file and
+    # the newly created user + home, and never switch identity.
     service, ssh = _service(mocker)
     # Sub-connection reports the wrong user, so verification fails.
     _patch_subconnection(mocker, whoami="someoneelse")
@@ -350,9 +412,28 @@ async def test_create_sudo_user_verification_failure_does_not_switch(mocker):
         await service.create_sudo_user(
             conn, server, mocker.MagicMock(), _ctx(mocker), "deploy"
         )
+    joined = "\n".join(conn.commands)
+    assert "rm -f /etc/sudoers.d/deploy" in joined
+    assert "deluser --remove-home deploy" in joined
     assert server.sudo_user_name is None
     assert server.username == "root"  # never lost root access
     ssh.evict_connection.assert_not_called()
+
+
+async def test_create_sudo_user_cleanup_failure_reported(mocker):
+    # If cleanup itself fails, say so clearly -- do not falsely claim a full rollback.
+    service, _ = _service(mocker)
+    _patch_subconnection(mocker, whoami="someoneelse")
+    conn = FakeConn(user_exists=False, fail_on="deluser")
+    server = FakeServer()
+    with pytest.raises(SudoUserVerificationFailed) as exc_info:
+        await service.create_sudo_user(
+            conn, server, mocker.MagicMock(), _ctx(mocker), "deploy"
+        )
+    output = exc_info.value.captured_output
+    assert "Cleanup incomplete" in output
+    assert "may remain" in output
+    assert "user account and home directory for deploy" in output
 
 
 # -- disable_root_login ----------------------------------------------------

@@ -39,8 +39,13 @@ import { QuickHardenSection } from '@/components/hardening/QuickHardenSection'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { useNewProjectStore } from '@/store/newProjectStore'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
+
+// Mirrors the backend Linux-username validation (schemas/servers.py).
+const USERNAME_PATTERN = /^[a-z_][a-z0-9_-]*$/
 
 const STATUS_META: Record<ServerStatus, { label: string; className: string }> = {
   verified: { label: 'verified', className: 'bg-green-600 text-white' },
@@ -86,6 +91,13 @@ function ServerDetail({ server }: { server: Server }) {
   // Operations with no persistent boolean column (update_system, base packages) that
   // succeeded in this session, so the card can show success without a server field.
   const [succeeded, setSucceeded] = useState<Record<string, boolean>>({})
+
+  // The sudo username to create. The backend requires a brand-new account, so on a
+  // conflict (409) the user edits this and retries with a different name. Prefilled
+  // with any name already recorded on the server, else the "deploy" default.
+  const [sudoUsername, setSudoUsername] = useState(
+    server.sudo_user_name ?? 'deploy',
+  )
 
   const [showFullFingerprint, setShowFullFingerprint] = useState(false)
 
@@ -354,10 +366,11 @@ function ServerDetail({ server }: { server: Server }) {
             const key = 'create_sudo_user'
             setErrors((e) => ({ ...e, [key]: null }))
             try {
-              // Reuse the existing sudo user name if set, otherwise default to deploy.
+              // The account must be new: send the chosen name. On a conflict the
+              // backend returns a 409 and the user picks a different one below.
               await createSudoUser.mutateAsync({
                 serverId: server.id,
-                body: { sudo_user_name: server.sudo_user_name ?? 'deploy' },
+                body: { sudo_user_name: sudoUsername },
               })
               toast.success('Sudo user created.')
             } catch (err) {
@@ -369,9 +382,38 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['create_sudo_user'])}
           output={errors['create_sudo_user'] ?? null}
-          disabled={anyRunning || locked}
-          disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
-        />
+          disabled={
+            anyRunning ||
+            locked ||
+            Boolean(server.sudo_user_name) ||
+            !USERNAME_PATTERN.test(sudoUsername)
+          }
+          disabledReason={
+            server.sudo_user_name
+              ? 'A sudo user already exists on this server.'
+              : lockedForReboot
+                ? disabledReasonReboot
+                : undefined
+          }
+        >
+          {!server.sudo_user_name && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="sudo-username">Sudo username</Label>
+              <Input
+                id="sudo-username"
+                value={sudoUsername}
+                onChange={(e) => setSudoUsername(e.target.value)}
+                placeholder="deploy"
+                disabled={anyRunning || locked}
+              />
+              {!USERNAME_PATTERN.test(sudoUsername) && (
+                <p className="text-xs text-destructive">
+                  Use a lowercase Linux username (letters, digits, _ and -).
+                </p>
+              )}
+            </div>
+          )}
+        </OperationCard>
 
         <OperationCard
           title="Disable root login"

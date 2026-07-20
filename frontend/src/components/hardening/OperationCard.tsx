@@ -5,7 +5,7 @@
 // ServerCard. The disabledReason is surfaced via the native title tooltip. This keeps
 // the component dependency free and consistent with the rest of the app.
 
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Check, ChevronDown, Loader2, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -33,6 +33,8 @@ export interface OperationCardProps {
   output: string | null
   disabled?: boolean
   disabledReason?: string
+  // Optional controls (e.g. a username input) rendered above the run button.
+  children?: ReactNode
 }
 
 function StatusBadge({
@@ -80,6 +82,7 @@ export function OperationCard({
   output,
   disabled = false,
   disabledReason,
+  children,
 }: OperationCardProps) {
   const hasOutput = status === 'failed' && Boolean(output)
   // Failed operations open the output by default so the error is visible.
@@ -100,6 +103,7 @@ export function OperationCard({
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        {children}
         <div title={disabled ? disabledReason : undefined}>
           <Button
             type="button"
