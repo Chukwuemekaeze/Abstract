@@ -75,6 +75,59 @@ class HostKeyMismatch(Exception):
     """The host presented a key that does not match the verified host key on record."""
 
 
+class PasswordChangeRequired(Exception):
+    """The server forces a password change on login (an expired password, as freshly
+    rebuilt DigitalOcean droplets ship with) and no new password was supplied. The
+    caller collects a new password from the user and retries install_key with it."""
+
+
+# The PAM/sshd signature for an account whose password must be changed before any
+# command will run. Rebuilt DO droplets arrive with the root password pre-expired
+# ("chage -d 0"), so the first command over a plain password session fails with this.
+_PASSWORD_EXPIRED_SIGNATURES = (
+    "password has expired",
+    "password change required",
+    "new password",
+)
+
+
+def _is_password_expired(text: str) -> bool:
+    lowered = text.lower()
+    return any(sig in lowered for sig in _PASSWORD_EXPIRED_SIGNATURES)
+
+
+class _PasswordChangeClient(asyncssh.SSHClient):
+    """Answers the keyboard-interactive (PAM) conversation OpenSSH runs when a password
+    is expired, so the forced change happens during authentication with no TTY. The
+    login prompt is answered with the old password; the "New password:" / "Retype new
+    password:" chauthtok prompts with the new one. A non-expired account just sees a
+    single "Password:" challenge answered with the old password (no change)."""
+
+    def __init__(self, old_password: str, new_password: str):
+        self._old = old_password
+        self._new = new_password
+
+    def kbdint_auth_requested(self) -> str:
+        # Empty string: let the server pick the PAM submethods.
+        return ""
+
+    def kbdint_challenge_received(
+        self,
+        name: str,
+        instructions: str,
+        lang: str,
+        prompts: list[tuple[str, bool]],
+    ) -> list[str]:
+        responses: list[str] = []
+        for prompt, _echo in prompts:
+            p = prompt.strip().lower()
+            if "new" in p or "retype" in p or "again" in p:
+                responses.append(self._new)
+            else:
+                responses.append(self._old)
+        return responses
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -138,6 +191,55 @@ class SSHService:
             fingerprint_sha256=key.get_fingerprint(),
         )
 
+    async def _write_key_and_harden(
+        self,
+        conn: asyncssh.SSHClientConnection,
+        server: Server,
+        app_public_key: str,
+        disable_password_auth: bool,
+    ) -> None:
+        """Append the app public key idempotently and, if requested, disable password
+        auth. Shared by both password-session paths (normal and forced-change)."""
+        quoted_pubkey = shlex.quote(app_public_key.strip())
+
+        await _run_checked(conn, "mkdir -p ~/.ssh && chmod 700 ~/.ssh")
+        # Idempotent append: only add the key if it is not already present.
+        append_cmd = (
+            "touch ~/.ssh/authorized_keys && "
+            f"grep -qF {quoted_pubkey} ~/.ssh/authorized_keys || "
+            f"echo {quoted_pubkey} >> ~/.ssh/authorized_keys"
+        )
+        await _run_checked(conn, append_cmd)
+        await _run_checked(conn, "chmod 600 ~/.ssh/authorized_keys")
+
+        if disable_password_auth:
+            # Disable password auth idempotently and confirm the running daemon
+            # reports it, via the shared sshd_config helper. _run_checked raises
+            # KeyInstallVerificationFailed if any edit or reload command fails; a
+            # runtime mismatch surfaces as SshHardeningFailed below.
+            async def run(script: str):
+                return await _run_checked(conn, script)
+
+            result = await apply_sshd_directive(
+                run,
+                directive="PasswordAuthentication",
+                value="no",
+                value_alternatives="yes|no",
+            )
+            if result is SshdDirectiveResult.UNAVAILABLE:
+                # sshd -T not supported here. The file edit succeeded but we
+                # cannot confirm runtime state, so warn rather than fail.
+                logger.warning(
+                    "Could not verify sshd runtime config (sshd -T unavailable). "
+                    "File edit succeeded but runtime state unconfirmed."
+                )
+            elif result is SshdDirectiveResult.MISMATCH:
+                raise SshHardeningFailed(
+                    "Edited sshd_config and reloaded sshd, but sshd is still "
+                    "reporting password authentication as enabled. Manual "
+                    "intervention required on the server."
+                )
+
     async def install_key(
         self,
         server: Server,
@@ -145,6 +247,7 @@ class SSHService:
         app_public_key: str,
         app_private_key: bytes,
         disable_password_auth: bool,
+        new_password: str | None = None,
     ) -> None:
         # Re-probe and confirm the host key has not changed since registration.
         current = await self.probe(server.host, server.port, server.username)
@@ -154,54 +257,59 @@ class SSHService:
             )
 
         known_hosts = _known_hosts_for(server)
-        quoted_pubkey = shlex.quote(app_public_key.strip())
 
-        # Password authenticated session to install the key. Strict host key check.
-        async with asyncssh.connect(
-            host=server.host,
-            port=server.port,
-            username=server.username,
-            password=password_from_client,
-            client_keys=None,
-            known_hosts=known_hosts,
-        ) as conn:
-            await _run_checked(conn, "mkdir -p ~/.ssh && chmod 700 ~/.ssh")
-            # Idempotent append: only add the key if it is not already present.
-            append_cmd = (
-                "touch ~/.ssh/authorized_keys && "
-                f"grep -qF {quoted_pubkey} ~/.ssh/authorized_keys || "
-                f"echo {quoted_pubkey} >> ~/.ssh/authorized_keys"
-            )
-            await _run_checked(conn, append_cmd)
-            await _run_checked(conn, "chmod 600 ~/.ssh/authorized_keys")
-
-            if disable_password_auth:
-                # Disable password auth idempotently and confirm the running daemon
-                # reports it, via the shared sshd_config helper. _run_checked raises
-                # KeyInstallVerificationFailed if any edit or reload command fails; a
-                # runtime mismatch surfaces as SshHardeningFailed below.
-                async def run(script: str):
-                    return await _run_checked(conn, script)
-
-                result = await apply_sshd_directive(
-                    run,
-                    directive="PasswordAuthentication",
-                    value="no",
-                    value_alternatives="yes|no",
-                )
-                if result is SshdDirectiveResult.UNAVAILABLE:
-                    # sshd -T not supported here. The file edit succeeded but we
-                    # cannot confirm runtime state, so warn rather than fail.
-                    logger.warning(
-                        "Could not verify sshd runtime config (sshd -T unavailable). "
-                        "File edit succeeded but runtime state unconfirmed."
+        if new_password is None:
+            # Normal path: plain password auth. If the account's password is expired
+            # (a freshly rebuilt DO droplet), the server refuses every command until a
+            # change happens, so the first command fails with the expiry signature.
+            # Surface that as PasswordChangeRequired so the caller can collect a new
+            # password and retry through the forced-change path below.
+            async with asyncssh.connect(
+                host=server.host,
+                port=server.port,
+                username=server.username,
+                password=password_from_client,
+                client_keys=None,
+                known_hosts=known_hosts,
+            ) as conn:
+                try:
+                    await self._write_key_and_harden(
+                        conn, server, app_public_key, disable_password_auth
                     )
-                elif result is SshdDirectiveResult.MISMATCH:
-                    raise SshHardeningFailed(
-                        "Edited sshd_config and reloaded sshd, but sshd is still "
-                        "reporting password authentication as enabled. Manual "
-                        "intervention required on the server."
+                except KeyInstallVerificationFailed as exc:
+                    if _is_password_expired(str(exc)):
+                        raise PasswordChangeRequired(
+                            "This server requires a password change on first login "
+                            "(the password has expired). Provide a new password to "
+                            "continue."
+                        ) from exc
+                    raise
+        else:
+            # Forced-change path: authenticate over keyboard-interactive (PAM) so the
+            # expired-password change completes during auth with no TTY. password_auth
+            # is disabled so the plain-password method cannot succeed-without-changing.
+            try:
+                async with asyncssh.connect(
+                    host=server.host,
+                    port=server.port,
+                    username=server.username,
+                    client_factory=lambda: _PasswordChangeClient(
+                        password_from_client, new_password
+                    ),
+                    password=password_from_client,
+                    password_auth=False,
+                    kbdint_auth=True,
+                    client_keys=None,
+                    known_hosts=known_hosts,
+                ) as conn:
+                    await self._write_key_and_harden(
+                        conn, server, app_public_key, disable_password_auth
                     )
+            except asyncssh.PermissionDenied as exc:
+                raise KeyInstallVerificationFailed(
+                    "The server rejected the new password (it may be too weak, or the "
+                    "current password is wrong). Choose a different password and retry."
+                ) from exc
 
         # Fresh key authenticated connection to prove the install worked.
         try:

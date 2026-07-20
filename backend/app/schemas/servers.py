@@ -21,11 +21,28 @@ class CreateServerRequest(BaseModel):
 class InstallKeyRequest(BaseModel):
     password: str = Field(min_length=1)
     disable_password_auth: bool = True
+    # Supplied only on a retry when the server forced a password change on first login
+    # (an expired password). Used once, over keyboard-interactive, to complete the
+    # change during authentication; never stored.
+    new_password: str | None = Field(default=None, min_length=1)
 
 
 # A valid lowercase Linux username: starts with a letter or underscore, then
 # lowercase letters, digits, underscores, or hyphens.
 _LINUX_USERNAME = r"^[a-z_][a-z0-9_-]*$"
+
+
+class ReprobeRequest(BaseModel):
+    """Re-registration (host key changed / key_mismatch) probe request.
+
+    A rebuilt VPS is almost always root + password again, so username defaults to
+    root but stays editable for images whose default account differs. Same Linux
+    username rules as the sudo user, capped at 32 chars.
+    """
+
+    username: str = Field(
+        default="root", min_length=1, max_length=32, pattern=_LINUX_USERNAME
+    )
 
 
 class CreateSudoUserRequest(BaseModel):

@@ -40,6 +40,21 @@ export function extractErrorMessage(error: unknown, fallback = 'Something went w
   return fallback
 }
 
+// True when install_key reported that the VPS forces a password change on first login
+// (an expired password). The backend returns a 409 with a structured detail carrying
+// { code: 'password_change_required' } so the dialog can reveal a new-password field.
+export function isPasswordChangeRequired(error: unknown): boolean {
+  if (axios.isAxiosError(error) && error.response?.status === 409) {
+    const detail = error.response.data?.detail
+    return (
+      !!detail &&
+      typeof detail === 'object' &&
+      detail.code === 'password_change_required'
+    )
+  }
+  return false
+}
+
 // Pull a hardening failure out of an axios error. Hardening endpoints return a
 // structured detail object { message, captured_output } on a 502 so the UI can show
 // the raw shell output in a collapsible panel. Falls back to extractErrorMessage for

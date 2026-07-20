@@ -8,6 +8,9 @@ import userEvent from '@testing-library/user-event'
 vi.mock('@/api/client', () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   extractErrorMessage: (_err: unknown, fallback: string) => fallback,
+  // Mirror the real helper's shape check so the tests can drive the branch.
+  isPasswordChangeRequired: (err: { response?: { data?: { detail?: { code?: string } } } }) =>
+    err?.response?.data?.detail?.code === 'password_change_required',
 }))
 
 import { apiClient } from '@/api/client'
@@ -102,6 +105,47 @@ describe('AddServerDialog', () => {
     )
     expect(post.mock.calls.every(([url]) => !String(url).includes('/cancel'))).toBe(
       true,
+    )
+  })
+
+  it('reveals the new-password field when the VPS forces a password change', async () => {
+    const user = userEvent.setup()
+    // First install attempt: server forces a password change (expired password).
+    post.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: { code: 'password_change_required' } } },
+    })
+    // Retry with the new password succeeds.
+    post.mockResolvedValueOnce({ data: { id: 'srv-1', status: 'verified' } })
+
+    renderWithProviders(<AddServerDialog />)
+    resumeIntoConfirmation()
+
+    await user.type(screen.getByLabelText('Password'), 'expired-pw')
+    await user.click(
+      screen.getByRole('button', { name: /fingerprint matches, install key/i }),
+    )
+
+    // The dialog stays on the confirmation step and reveals the new-password field.
+    const newPassword = await screen.findByLabelText('New root password')
+    // Install is gated until the new password is entered.
+    const install = screen.getByRole('button', {
+      name: /fingerprint matches, install key/i,
+    })
+    expect(install).toBeDisabled()
+    await user.type(newPassword, 'a-fresh-strong-password')
+    expect(install).toBeEnabled()
+
+    await user.click(install)
+
+    // The retry carries the new password through to install_key.
+    await waitFor(() =>
+      expect(post).toHaveBeenLastCalledWith(
+        '/servers/srv-1/install_key',
+        expect.objectContaining({
+          password: 'expired-pw',
+          new_password: 'a-fresh-strong-password',
+        }),
+      ),
     )
   })
 })

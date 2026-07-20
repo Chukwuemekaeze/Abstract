@@ -3,11 +3,11 @@
 //   form  -> probe  -> awaiting_confirmation -> install_key -> done
 // Errors at either step move us to the failed step with a retry affordance.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { extractErrorMessage } from '@/api/client'
+import { extractErrorMessage, isPasswordChangeRequired } from '@/api/client'
 import {
   useInstallKeyMutation,
   useProbeServerMutation,
@@ -42,20 +42,38 @@ export function AddServerDialog() {
   const probeMutation = useProbeServerMutation()
   const installMutation = useInstallKeyMutation()
 
+  // Set when the VPS forces a password change on first login (expired password). We
+  // stay on the confirmation step and reveal a "New password" field for the retry.
+  // Kept local so the new password is never persisted, like the password itself.
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+
   // The dialog is open for every step except idle.
   const isOpen = step !== 'idle'
+
+  // Reset the transient password-change state and close. Kept out of an effect so the
+  // reset is an explicit event, not a render side effect.
+  const handleClose = () => {
+    setPasswordChangeRequired(false)
+    setNewPassword('')
+    close()
+  }
 
   // On the done step, auto close after a short success pause.
   useEffect(() => {
     if (step !== 'done') return
-    const timer = setTimeout(() => close(), 2000)
+    const timer = setTimeout(() => handleClose(), 2000)
     return () => clearTimeout(timer)
-  }, [step, close])
+    // handleClose only touches setState/close, all stable for this purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step])
 
   // Step one: probe the host, then move to fingerprint confirmation.
   const handleProbe = async () => {
     setStep('probing')
     setError(null)
+    setPasswordChangeRequired(false)
+    setNewPassword('')
     try {
       const result = await probeMutation.mutateAsync({
         name: formData.name,
@@ -86,11 +104,19 @@ export function AddServerDialog() {
         body: {
           password: formData.password,
           disable_password_auth: formData.disable_password_auth,
+          ...(passwordChangeRequired ? { new_password: newPassword } : {}),
         },
       })
       setStep('done')
       toast.success('Server verified and key installed.')
     } catch (err) {
+      if (isPasswordChangeRequired(err)) {
+        // The VPS demands a password change on first login. Reveal the new-password
+        // field and stay on the confirmation step so the user can retry in place.
+        setPasswordChangeRequired(true)
+        setStep('awaiting_confirmation')
+        return
+      }
       setError(extractErrorMessage(err, 'Key installation failed.'))
       setStep('failed')
     }
@@ -106,7 +132,7 @@ export function AddServerDialog() {
 
   // Only allow closing via the controlled handler so state always resets.
   const handleOpenChange = (open: boolean) => {
-    if (!open) close()
+    if (!open) handleClose()
   }
 
   return (
@@ -172,7 +198,7 @@ export function AddServerDialog() {
               </div>
             </div>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={close}>
+              <Button type="button" variant="outline" onClick={handleClose}>
                 Cancel
               </Button>
               <Button type="submit">Continue</Button>
@@ -195,11 +221,13 @@ export function AddServerDialog() {
           <FingerprintConfirm
             fingerprint={pendingServer.fingerprint}
             onConfirm={handleInstall}
-            onCancel={close}
-            busy={!formData.password}
+            onCancel={handleClose}
+            busy={!formData.password || (passwordChangeRequired && !newPassword)}
           >
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">
+                {passwordChangeRequired ? 'Current (expired) password' : 'Password'}
+              </Label>
               <Input
                 id="password"
                 type="password"
@@ -210,6 +238,25 @@ export function AddServerDialog() {
                 required
               />
             </div>
+            {passwordChangeRequired && (
+              <div className="flex flex-col gap-2">
+                <div className="rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3 text-sm text-muted-foreground">
+                  This server requires a password change on first login (its password
+                  has expired). Enter a new root password to continue — Abstract sets it
+                  during login, then installs its key.
+                </div>
+                <Label htmlFor="new-password">New root password</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="A new password for the root account"
+                  autoComplete="off"
+                  required
+                />
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Checkbox
                 id="disable_password_auth"
@@ -246,7 +293,7 @@ export function AddServerDialog() {
           <div className="flex flex-col gap-4 py-4">
             <p className="text-destructive text-sm">{error}</p>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={close}>
+              <Button type="button" variant="outline" onClick={handleClose}>
                 Close
               </Button>
               <Button type="button" onClick={handleRetry}>
