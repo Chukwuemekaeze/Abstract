@@ -62,6 +62,14 @@ class Server(Base):
     fingerprint_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
 
     status: Mapped[str] = mapped_column(String, nullable=False)
+    # True once Abstract's public key has been written to the server's
+    # authorized_keys during install_key. Set as soon as the append succeeds, even
+    # if a later install sub-step (disable password auth, key-login verification)
+    # fails and the row stays pending. Cancellation reads it to decide whether it
+    # must strip the key off the VPS before deleting the row. Internal; not serialized.
+    key_installed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     password_auth_disabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
