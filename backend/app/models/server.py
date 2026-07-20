@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    Text,
     func,
     text,
 )
@@ -23,6 +24,7 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.app_ssh_key import AppSshKey
+    from app.models.project import Project
 
 SERVER_STATUSES = ("pending_verification", "verified", "key_mismatch")
 
@@ -100,9 +102,21 @@ class Server(Base):
     last_system_update_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The single in-flight server-level operation, currently only 'deleting', or
+    # null when idle. Mirrors projects.active_operation: set in a short transaction
+    # before server deletion runs external side effects so concurrent server
+    # mutations are rejected 409, and the row is gone once deletion completes.
+    active_operation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # The app managed keypair scoped to this server. Deleting the server cascades to
     # the key row (see AppSshKey for the authorized_keys removal ordering constraint).
     app_ssh_key: Mapped[Optional["AppSshKey"]] = relationship(
         back_populates="server", uselist=False, cascade="all, delete-orphan"
+    )
+    # Projects hosted on this server. Loaded eagerly by server deletion to iterate
+    # per-project teardown. Row removal is handled by the FK ondelete=CASCADE
+    # (passive_deletes); by the time the server row is deleted the loop has already
+    # removed every project.
+    projects: Mapped[list["Project"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True
     )
