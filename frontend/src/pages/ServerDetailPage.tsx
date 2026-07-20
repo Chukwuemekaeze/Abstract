@@ -29,6 +29,7 @@ import {
 import { useProjectsByServer } from '@/api/projects'
 import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
+import { DeleteServerDialog } from '@/components/servers/DeleteServerDialog'
 import { ProjectCard } from '@/components/projects/ProjectCard'
 import {
   OperationCard,
@@ -39,6 +40,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useNewProjectStore } from '@/store/newProjectStore'
+import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
 
 const STATUS_META: Record<ServerStatus, { label: string; className: string }> = {
   verified: { label: 'verified', className: 'bg-green-600 text-white' },
@@ -150,6 +152,10 @@ function ServerDetail({ server }: { server: Server }) {
     reboot.isPending
 
   const lockedForReboot = rebooting
+  // A server-level operation (currently only 'deleting') is in flight. Lock every
+  // mutation on the page while it runs; the banner below explains why.
+  const opLock = server.active_operation !== null
+  const locked = lockedForReboot || opLock
 
   // Build a run handler for a standard operation.
   function runner(
@@ -191,13 +197,25 @@ function ServerDetail({ server }: { server: Server }) {
   const status = STATUS_META[server.status]
   const disabledReasonReboot = 'Server is rebooting.'
 
+  const openDeleteServer = useDeleteServerDialogStore((s) => s.openWith)
+
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
       <div>
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-bold">{server.name}</h1>
-          <Badge className={status.className}>{status.label}</Badge>
+          <div className="flex items-center gap-2">
+            <Badge className={status.className}>{status.label}</Badge>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => openDeleteServer(server.id)}
+              disabled={opLock}
+            >
+              Delete server
+            </Button>
+          </div>
         </div>
         <p className="text-muted-foreground text-sm">
           {server.username}@{server.host}:{server.port}
@@ -211,6 +229,17 @@ function ServerDetail({ server }: { server: Server }) {
           {fingerprintDisplay}
         </button>
       </div>
+
+      {/* Server-level operation lock banner */}
+      {opLock && (
+        <Alert>
+          <Loader2 className="size-4 animate-spin" />
+          <AlertTitle>Operation in progress: {server.active_operation}</AlertTitle>
+          <AlertDescription>
+            Mutations are disabled until it finishes.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Reboot banners */}
       {rebooting && (
@@ -227,7 +256,7 @@ function ServerDetail({ server }: { server: Server }) {
         </Alert>
       )}
 
-      <QuickHardenSection server={server} disabled={anyRunning || lockedForReboot} />
+      <QuickHardenSection server={server} disabled={anyRunning || locked} />
 
       <ProjectsSection server={server} />
 
@@ -251,7 +280,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['update_system'])}
           output={errors['update_system'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -272,7 +301,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['install_base_packages'])}
           output={errors['install_base_packages'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -289,7 +318,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['install_docker'])}
           output={errors['install_docker'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -306,7 +335,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel={server.nginx_installed ? 'Run again' : 'Run'}
           isRetry={Boolean(errors['install_nginx'])}
           output={errors['install_nginx'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -340,7 +369,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['create_sudo_user'])}
           output={errors['create_sudo_user'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -361,7 +390,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['disable_root_login'])}
           output={errors['disable_root_login'] ?? null}
-          disabled={anyRunning || lockedForReboot || !server.sudo_user_name}
+          disabled={anyRunning || locked || !server.sudo_user_name}
           disabledReason={
             lockedForReboot
               ? disabledReasonReboot
@@ -388,7 +417,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['disable_password_auth'])}
           output={errors['disable_password_auth'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -409,7 +438,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['configure_firewall'])}
           output={errors['configure_firewall'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -426,7 +455,7 @@ function ServerDetail({ server }: { server: Server }) {
           runLabel="Run"
           isRetry={Boolean(errors['create_swap'])}
           output={errors['create_swap'] ?? null}
-          disabled={anyRunning || lockedForReboot}
+          disabled={anyRunning || locked}
           disabledReason={lockedForReboot ? disabledReasonReboot : undefined}
         />
 
@@ -458,12 +487,14 @@ function ServerDetail({ server }: { server: Server }) {
           output={rebootError}
           // The reboot button stays usable during reboot only when it has failed; the
           // anyRunning lock is not applied here because reboot drives its own state.
-          disabled={anyRunning && !reboot.isPending ? true : rebooting}
+          disabled={opLock || (anyRunning && !reboot.isPending ? true : rebooting)}
           disabledReason={
             rebooting ? 'Reboot already in progress.' : undefined
           }
         />
       </div>
+
+      <DeleteServerDialog />
     </div>
   )
 }

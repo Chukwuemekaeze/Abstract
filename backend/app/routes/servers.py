@@ -11,21 +11,31 @@ from datetime import datetime, timezone
 from uuid import UUID  # noqa: F401  (server_id path param type is resolved by FastAPI)
 
 import redis.asyncio as aioredis
+from clerk_backend_api import Clerk
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.clerk import get_clerk_client
 from app.db import get_db
 from app.deps.auth import get_current_session_id, get_current_user
 from app.deps.server_ownership import get_owned_server
-from app.deps.services import get_key_provider_dep, get_ssh_service
-from app.models import Server, User
+from app.deps.services import (
+    get_github_service,
+    get_key_provider_dep,
+    get_ssh_service,
+)
+from app.models import Project, Server, User
 from app.redis_client import get_redis
 from app.schemas.servers import (
     CommandResultResponse,
     CreateServerRequest,
+    DeleteServerResponse,
     InstallKeyRequest,
     ProbeResponse,
+    ServerDeletionPreviewProject,
+    ServerDeletionPreviewResponse,
     ServerResponse,
 )
 from app.services.app_key_service import (
@@ -33,7 +43,13 @@ from app.services.app_key_service import (
     create_key_for_server,
     get_key_for_server,
 )
+from app.services.github_service import GithubService
 from app.services.key_provider import KeyProvider
+from app.services.server_deletion_service import (
+    ServerDeletionError,
+    ServerOperationInFlight,
+    delete_server,
+)
 from app.services.ssh_service import (
     HostKeyChangedDuringInstall,
     HostKeyMismatch,
@@ -270,3 +286,79 @@ async def ping_server(
     if not reachable:
         raise HTTPException(503, "Server is not reachable.")
     return {"status": "ok"}
+
+
+@router.get(
+    "/{server_id}/deletion_preview", response_model=ServerDeletionPreviewResponse
+)
+async def deletion_preview(
+    server: Server = Depends(get_owned_server),
+    db: AsyncSession = Depends(get_db),
+) -> ServerDeletionPreviewResponse:
+    """List the projects that a server deletion would destroy. Read-only; used by
+    the confirm dialog so the user reviews the blast radius before deleting."""
+    rows = await db.scalars(
+        select(Project)
+        .where(Project.server_id == server.id)
+        .order_by(Project.created_at.asc())
+    )
+    return ServerDeletionPreviewResponse(
+        projects=[
+            ServerDeletionPreviewProject.model_validate(row) for row in rows
+        ]
+    )
+
+
+@router.delete("/{server_id}", response_model=DeleteServerResponse)
+async def delete_server_route(
+    server: Server = Depends(get_owned_server),
+    current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+    ssh: SSHService = Depends(get_ssh_service),
+    key_provider: KeyProvider = Depends(get_key_provider_dep),
+    clerk: Clerk = Depends(get_clerk_client),
+    github: GithubService = Depends(get_github_service),
+) -> DeleteServerResponse:
+    """Delete a server: tear down every project on it, remove Abstract from the VPS
+    (revoke sudoers, restore password + root SSH login, strip the app key from
+    authorized_keys), then hard-delete the row.
+
+    409 if the server or any of its projects is already busy. 502 with the ordered
+    step list if any step fails; nothing is left half-deleted, so retrying picks up
+    cleanly once the underlying problem (for example VPS reachability) is fixed.
+    """
+    if server.active_operation is not None:
+        raise HTTPException(
+            409, {"active_operation": server.active_operation}
+        )
+    try:
+        steps = await delete_server(
+            server=server,
+            current_user=current_user,
+            session_id=session_id,
+            db=db,
+            ssh=ssh,
+            redis=redis,
+            key_provider=key_provider,
+            clerk=clerk,
+            github=github,
+        )
+    except ServerOperationInFlight as exc:
+        raise HTTPException(409, exc.detail) from exc
+    except ServerDeletionError as exc:
+        raise HTTPException(
+            502,
+            detail={
+                "message": exc.message,
+                "failed_step": exc.failed_step,
+                "failed_project_id": (
+                    str(exc.failed_project_id) if exc.failed_project_id else None
+                ),
+                "failed_project_name": exc.failed_project_name,
+                "steps": [step.model_dump(mode="json") for step in exc.steps],
+            },
+        ) from exc
+
+    return DeleteServerResponse(success=True, steps=steps)

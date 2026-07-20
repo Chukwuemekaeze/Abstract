@@ -5,6 +5,7 @@ encrypted_private_key). Only fingerprint_sha256 is exposed for display.
 """
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +51,7 @@ class ServerResponse(BaseModel):
     port: int
     username: str
     status: str
+    active_operation: str | None
     fingerprint_sha256: str | None
     host_key_type: str | None
     password_auth_disabled: bool
@@ -72,3 +74,33 @@ class CommandResultResponse(BaseModel):
     stdout: str
     stderr: str
     exit_status: int
+
+
+class ServerDeletionStepResult(BaseModel):
+    """One step of a server deletion. project_id/project_name are populated only
+    for steps that ran inside the per-project deletion loop."""
+
+    name: str
+    status: Literal["completed", "skipped", "failed"]
+    detail: str | None = None
+    project_id: UUID | None = None
+    project_name: str | None = None
+
+
+class DeleteServerResponse(BaseModel):
+    success: bool
+    steps: list[ServerDeletionStepResult]
+
+
+class ServerDeletionPreviewProject(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    slug: str
+    domain: str | None
+    runtime_status: str
+
+
+class ServerDeletionPreviewResponse(BaseModel):
+    projects: list[ServerDeletionPreviewProject]
