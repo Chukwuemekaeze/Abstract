@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { apiClient, extractHardeningError } from '@/api/client'
@@ -32,6 +32,7 @@ import { useProjectsByServer } from '@/api/projects'
 import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
 import { DeleteServerDialog } from '@/components/servers/DeleteServerDialog'
+import { ReRegisterServerDialog } from '@/components/servers/ReRegisterServerDialog'
 import { ProjectCard } from '@/components/projects/ProjectCard'
 import {
   OperationCard,
@@ -47,6 +48,7 @@ import { useAddServerStore } from '@/store/addServerStore'
 import { useCancelRegistrationDialogStore } from '@/store/cancel-registration-dialog'
 import { useNewProjectStore } from '@/store/newProjectStore'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
+import { useReRegisterServerDialogStore } from '@/store/reregister-server-dialog'
 
 // Mirrors the backend Linux-username validation (schemas/servers.py).
 const USERNAME_PATTERN = /^[a-z_][a-z0-9_-]*$/
@@ -86,6 +88,8 @@ export function ServerDetailPage() {
         {server &&
           (server.status === 'pending_verification' ? (
             <PendingServerDetail server={server} />
+          ) : server.status === 'key_mismatch' ? (
+            <KeyMismatchServerDetail server={server} />
           ) : (
             <ServerDetail server={server} />
           ))}
@@ -149,6 +153,90 @@ function PendingServerDetail({ server }: { server: Server }) {
 
       <AddServerDialog />
       <CancelRegistrationDialog />
+    </div>
+  )
+}
+
+// The host key on record no longer matches what the server presents. TOFU treats this
+// as an untrusted identity change (rebuild, IP reuse, key rotation, or an attack —
+// Abstract cannot tell which), so every operation is blocked: this view shows no
+// hardening or project actions. The user gets exactly two explicit ways forward —
+// re-register against the new fingerprint, or remove the stale record.
+function KeyMismatchServerDetail({ server }: { server: Server }) {
+  const [showFullFingerprint, setShowFullFingerprint] = useState(false)
+  const openReRegister = useReRegisterServerDialogStore((s) => s.openWith)
+  const openDeleteServer = useDeleteServerDialogStore((s) => s.openWith)
+
+  const status = STATUS_META[server.status]
+  const fingerprint = server.fingerprint_sha256 ?? 'unknown'
+  const fingerprintDisplay =
+    showFullFingerprint || fingerprint.length <= 24
+      ? fingerprint
+      : `${fingerprint.slice(0, 24)}...`
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold">{server.name}</h1>
+          <Badge className={status.className}>{status.label}</Badge>
+        </div>
+        <p className="text-muted-foreground text-sm">
+          {server.username}@{server.host}:{server.port}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowFullFingerprint((v) => !v)}
+          className="mt-2 text-left font-mono text-xs text-muted-foreground hover:text-foreground"
+          title="Click to expand or collapse"
+        >
+          {fingerprintDisplay}
+        </button>
+      </div>
+
+      <Alert variant="destructive">
+        <AlertTriangle className="size-4" />
+        <AlertTitle>
+          Host key has changed — this server's identity can no longer be verified
+        </AlertTitle>
+        <AlertDescription>
+          <p>
+            The SSH host key this server presents no longer matches the one Abstract
+            trusted. This usually means the VPS was rebuilt or replaced by your provider
+            (its host key and Abstract's deploy key are wiped even when the IP stays the
+            same), but Abstract cannot rule out key rotation or an attack, so it will not
+            trust the new key automatically.
+          </p>
+          <p className="mt-2">
+            All operations on this server are blocked. Any projects and deployments
+            Abstract had recorded here are now stale and must not be treated as healthy.
+            Choose one:
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            <li>
+              <strong>Re-register this server</strong> — confirm the new fingerprint and
+              install a fresh deploy key. This resets the stale project, deployment, and
+              hardening state.
+            </li>
+            <li>
+              <strong>Remove server record</strong> — delete Abstract's record of this
+              server, including its projects.
+            </li>
+          </ul>
+        </AlertDescription>
+      </Alert>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => openReRegister(server.id)}>
+          Re-register this server
+        </Button>
+        <Button variant="destructive" onClick={() => openDeleteServer(server.id)}>
+          Remove server record
+        </Button>
+      </div>
+
+      <ReRegisterServerDialog />
+      <DeleteServerDialog />
     </div>
   )
 }
