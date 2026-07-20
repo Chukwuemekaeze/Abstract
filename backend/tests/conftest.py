@@ -151,6 +151,13 @@ class FakeRedis:
     async def set(self, key: str, value: bytes, ex: int | None = None):
         self._store[key] = value
 
+    async def delete(self, *keys: str) -> int:
+        removed = 0
+        for key in keys:
+            if self._store.pop(key, None) is not None:
+                removed += 1
+        return removed
+
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession, test_user: User):

@@ -6,7 +6,10 @@ import pytest
 from sqlalchemy import select
 
 from app.models import Server
-from app.services.ssh_service import KeyInstallVerificationFailed
+from app.services.ssh_service import (
+    KeyInstallVerificationFailed,
+    PasswordChangeRequired,
+)
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -128,6 +131,58 @@ async def test_install_key_records_key_installed_on_partial_failure(
     )
     assert row.status == "pending_verification"
     assert row.key_installed is True
+
+
+async def test_install_key_reports_password_change_required(
+    client, mock_ssh, db_session, test_user
+):
+    # A freshly rebuilt DO droplet forces a password change on first login. install_key
+    # surfaces that as PasswordChangeRequired; the route returns a structured 409 the
+    # frontend recognizes, and the key never landed so key_installed stays False.
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+    mock_ssh.install_key.side_effect = PasswordChangeRequired(
+        "This server requires a password change on first login."
+    )
+
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={"password": "expired", "disable_password_auth": True},
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "password_change_required"
+
+    row = await db_session.scalar(
+        select(Server).where(Server.id == probe["server_id"])
+    )
+    assert row.status == "pending_verification"
+    assert row.key_installed is False
+
+
+async def test_install_key_forwards_new_password(client, mock_ssh, db_session, test_user):
+    # On the retry the user supplies a new password; the route forwards it to the
+    # service (which changes it over keyboard-interactive) and the server verifies.
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={
+            "password": "expired",
+            "disable_password_auth": True,
+            "new_password": "a-fresh-strong-password",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "verified"
+    _args, kwargs = mock_ssh.install_key.call_args
+    assert kwargs["new_password"] == "a-fresh-strong-password"
 
 
 async def test_list_returns_only_current_user_servers(client, mock_ssh, db_session, test_user):

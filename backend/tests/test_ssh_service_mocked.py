@@ -295,6 +295,165 @@ async def test_get_connection_reconnects_when_username_changed(mocker):
     assert first_conn.closed is True  # stale connection was closed
 
 
+EXPIRED_WARNING = (
+    "WARNING: Your password has expired. "
+    "Password change required but no TTY available."
+)
+
+
+class ExpiredConn(FakeConn):
+    """A box whose password is expired: every command is refused until it is changed,
+    so the first install command (mkdir) fails with the PAM expiry warning."""
+
+    async def run(self, command, check=False):
+        if "mkdir" in command:
+            return FakeProcResult(stderr=EXPIRED_WARNING, exit_status=1)
+        return await super().run(command, check=check)
+
+
+def test_password_change_client_maps_prompts_to_old_and_new():
+    client = ssh_mod._PasswordChangeClient("OLDPASS", "NEWPASS")
+    assert client.kbdint_auth_requested() == ""
+    # The login prompt and the "current password" re-prompt take the old password.
+    assert client.kbdint_challenge_received("", "", "", [("Password:", False)]) == [
+        "OLDPASS"
+    ]
+    assert client.kbdint_challenge_received(
+        "", "", "", [("(current) UNIX password:", False)]
+    ) == ["OLDPASS"]
+    # The chauthtok prompts take the new password.
+    assert client.kbdint_challenge_received(
+        "", "", "", [("New password:", False)]
+    ) == ["NEWPASS"]
+    assert client.kbdint_challenge_received(
+        "", "", "", [("Retype new password:", False)]
+    ) == ["NEWPASS"]
+    # A combined challenge is answered position by position.
+    assert client.kbdint_challenge_received(
+        "",
+        "",
+        "",
+        [
+            ("Current password:", False),
+            ("New password:", False),
+            ("Retype new password:", False),
+        ],
+    ) == ["OLDPASS", "NEWPASS", "NEWPASS"]
+
+
+async def test_install_key_detects_expired_password(mocker):
+    conn = ExpiredConn()
+    mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "connect", return_value=FakeConnect(conn))
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    server = FakeServer()
+    with pytest.raises(ssh_mod.PasswordChangeRequired):
+        await SSHService().install_key(
+            server=server,
+            password_from_client="expired",
+            app_public_key="ssh-ed25519 AAAAAPPKEY app-deploy-x",
+            app_private_key=b"PRIVATEKEYBYTES",
+            disable_password_auth=False,
+        )
+
+
+async def test_install_key_with_new_password_uses_kbdint_change_connection(mocker):
+    conn = FakeConn(whoami="root")
+    mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    connect_mock = mocker.patch.object(
+        ssh_mod.asyncssh, "connect", return_value=FakeConnect(conn)
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    server = FakeServer()
+    await SSHService().install_key(
+        server=server,
+        password_from_client="expired",
+        app_public_key="ssh-ed25519 AAAAAPPKEY app-deploy-x",
+        app_private_key=b"PRIVATEKEYBYTES",
+        disable_password_auth=False,
+        new_password="freshpass",
+    )
+
+    # The change connection forces keyboard-interactive (no plain password method) and
+    # wires up the PAM prompt handler.
+    change_call = connect_mock.call_args_list[0]
+    assert change_call.kwargs["password_auth"] is False
+    assert change_call.kwargs["kbdint_auth"] is True
+    assert callable(change_call.kwargs["client_factory"])
+    factory = change_call.kwargs["client_factory"]()
+    assert isinstance(factory, ssh_mod._PasswordChangeClient)
+
+    # Then the normal install sequence runs and key login is verified.
+    joined = "\n".join(conn.commands)
+    assert "authorized_keys" in joined
+    assert "whoami" in conn.commands
+
+
+async def test_install_key_with_new_password_surfaces_rejection(mocker):
+    mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    mocker.patch.object(
+        ssh_mod.asyncssh,
+        "connect",
+        side_effect=ssh_mod.asyncssh.PermissionDenied("new password rejected"),
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    server = FakeServer()
+    with pytest.raises(ssh_mod.KeyInstallVerificationFailed):
+        await SSHService().install_key(
+            server=server,
+            password_from_client="expired",
+            app_public_key="ssh-ed25519 AAAAAPPKEY",
+            app_private_key=b"PRIVATEKEYBYTES",
+            disable_password_auth=False,
+            new_password="weak",
+        )
+
+
+async def test_get_connection_flags_key_mismatch_on_host_key_change(mocker):
+    """A changed host key surfaces as HostKeyNotVerifiable. get_connection must flip the
+    server to key_mismatch, commit, and raise HostKeyMismatch so the operation aborts and
+    every later operation stays blocked until the user re-establishes trust."""
+    from tests.conftest import FakeRedis
+
+    master_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+    provider = EnvKeyProvider(master_key)
+    encrypted = await provider.encrypt(b"PRIVATEKEYBYTES")
+    fake_app_key = mocker.MagicMock(encrypted_private_key=encrypted)
+
+    db = mocker.MagicMock()
+    db.scalar = mocker.AsyncMock(return_value=fake_app_key)
+    db.commit = mocker.AsyncMock()
+
+    mocker.patch.object(
+        ssh_mod.asyncssh,
+        "connect",
+        side_effect=ssh_mod.asyncssh.HostKeyNotVerifiable("host key changed"),
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    server = FakeServer()
+    assert server.status == "verified"
+    with pytest.raises(ssh_mod.HostKeyMismatch):
+        await SSHService().get_connection(
+            server, uuid4(), "sess", FakeRedis(), db, provider
+        )
+    assert server.status == "key_mismatch"
+    db.commit.assert_awaited_once()
+
+
 async def test_run_command_returns_result(mocker):
     from tests.conftest import FakeRedis
 
