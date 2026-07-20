@@ -48,6 +48,7 @@ from app.services.key_provider import KeyProvider
 from app.services.server_deletion_service import (
     ServerDeletionError,
     ServerOperationInFlight,
+    cancel_registration,
     delete_server,
 )
 from app.services.ssh_service import (
@@ -162,14 +163,21 @@ async def install_key(
             disable_password_auth=disable_password_auth_from_client,
         )
     except HostKeyChangedDuringInstall as exc:
+        # Aborted before the key was appended; nothing to clean up on cancel.
         raise HTTPException(409, str(exc)) from exc
     except (KeyInstallVerificationFailed, SshHardeningFailed) as exc:
+        # These only fire after the key was appended to authorized_keys (disable
+        # password auth / key-login verification). Record that the key landed so a
+        # later cancel strips it off the VPS, then surface the failure.
+        server.key_installed = True
+        await db.commit()
         raise HTTPException(502, str(exc)) from exc
     except ProbeError as exc:
         raise HTTPException(502, str(exc)) from exc
 
     server.status = "verified"
     server.verified_at = datetime.now(timezone.utc)
+    server.key_installed = True
     server.password_auth_disabled = disable_password_auth_from_client
     await db.commit()
     await db.refresh(server)
@@ -177,23 +185,56 @@ async def install_key(
     return ServerResponse.model_validate(server)
 
 
-@router.post("/{server_id}/cancel", status_code=204)
+@router.post("/{server_id}/cancel", response_model=DeleteServerResponse)
 async def cancel_server(
     server: Server = Depends(get_owned_server),
+    current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
-) -> None:
-    """Cancel and delete a server that is still pending verification.
+    redis: aioredis.Redis = Depends(get_redis),
+    ssh: SSHService = Depends(get_ssh_service),
+    key_provider: KeyProvider = Depends(get_key_provider_dep),
+) -> DeleteServerResponse:
+    """Cancel a server that is still pending verification.
 
-    Used to abort the add server flow before the key is installed. Returns 400 if the
-    server has already been verified, since verified servers are deleted through a
-    different (future) path.
+    The explicit "cancel registration" action. If Abstract's key was already
+    installed on the VPS (a partial install that then failed), first strip the key
+    off the box (re-enabling password login when install had disabled it) before
+    deleting the row. Nothing is deleted while the key might still be on the server.
+
+    400 if the server has already been verified (verified servers are deleted through
+    DELETE /{server_id}). 502 with the ordered step list if remote cleanup cannot be
+    completed; the row is kept intact so the user can retry once the box is reachable.
     """
     if server.status != "pending_verification":
         raise HTTPException(
             400, "Only pending verification servers can be cancelled."
         )
-    await db.delete(server)
-    await db.commit()
+    try:
+        steps = await cancel_registration(
+            server=server,
+            current_user=current_user,
+            session_id=session_id,
+            db=db,
+            ssh=ssh,
+            redis=redis,
+            key_provider=key_provider,
+        )
+    except ServerDeletionError as exc:
+        raise HTTPException(
+            502,
+            detail={
+                "message": exc.message,
+                "failed_step": exc.failed_step,
+                "failed_project_id": (
+                    str(exc.failed_project_id) if exc.failed_project_id else None
+                ),
+                "failed_project_name": exc.failed_project_name,
+                "steps": [step.model_dump(mode="json") for step in exc.steps],
+            },
+        ) from exc
+
+    return DeleteServerResponse(success=True, steps=steps)
 
 
 @router.get("", response_model=list[ServerResponse])
