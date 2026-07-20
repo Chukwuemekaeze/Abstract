@@ -5,8 +5,10 @@
 // consistent. All network calls go through the shared axios client (baseURL '/api').
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 
-import { apiClient } from '@/api/client'
+import { apiClient, extractErrorMessage } from '@/api/client'
+import { projectKeys } from '@/api/projects'
 
 // Mirrors the backend server status check constraint.
 export type ServerStatus = 'pending_verification' | 'verified' | 'key_mismatch'
@@ -21,6 +23,9 @@ export interface Server {
   port: number
   username: string
   status: ServerStatus
+  // The single in-flight server-level operation, or null when idle. Currently
+  // only 'deleting'. When set, the detail page locks its mutation UI.
+  active_operation: 'deleting' | null
   fingerprint_sha256: string | null
   host_key_type: string | null
   password_auth_disabled: boolean
@@ -217,4 +222,110 @@ export function usePingServerMutation() {
       return data
     },
   })
+}
+
+// --- Server deletion ------------------------------------------------------
+
+// Mirrors the backend ServerDeletionStepResult. project_id/project_name are set
+// only for steps that ran inside the per-project deletion loop.
+export interface ServerDeletionStepResult {
+  name: string
+  status: 'completed' | 'skipped' | 'failed'
+  detail: string | null
+  project_id: string | null
+  project_name: string | null
+}
+
+export interface DeleteServerResponse {
+  success: boolean
+  steps: ServerDeletionStepResult[]
+}
+
+// One project that a server deletion would destroy, for the confirm dialog.
+export interface ServerDeletionPreviewProject {
+  id: string
+  name: string
+  slug: string
+  domain: string | null
+  runtime_status: 'never_started' | 'running' | 'failed'
+}
+
+export interface ServerDeletionPreviewResponse {
+  projects: ServerDeletionPreviewProject[]
+}
+
+// Read-only preview of the projects a deletion would remove. Enabled only while
+// the dialog is open so it does not fetch in the background.
+export function useServerDeletionPreview(
+  serverId: string | undefined,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: serverId
+      ? [...serverKeys.detail(serverId), 'deletion_preview']
+      : serverKeys.all,
+    enabled: enabled && Boolean(serverId),
+    queryFn: async (): Promise<ServerDeletionPreviewResponse> => {
+      const { data } = await apiClient.get<ServerDeletionPreviewResponse>(
+        `/servers/${serverId}/deletion_preview`,
+      )
+      return data
+    },
+  })
+}
+
+// Delete a server and everything Abstract put on it. Invalidates the server list,
+// this server's detail, and the project list (its projects are gone). The caller
+// handles navigation away from the now-deleted server on success.
+export function useDeleteServerMutation(serverId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<DeleteServerResponse> => {
+      const { data } = await apiClient.delete<DeleteServerResponse>(
+        `/servers/${serverId}`,
+      )
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: serverKeys.all })
+      qc.invalidateQueries({ queryKey: serverKeys.detail(serverId) })
+      qc.invalidateQueries({ queryKey: projectKeys.all })
+    },
+  })
+}
+
+// Pull the structured 502 body a failed server deletion returns (message, failed
+// step, failed project, and the ordered step list) so the dialog can show exactly
+// where it stopped. Falls back to extractErrorMessage for plain details (e.g. a
+// 409 while an operation is already in flight) and non-axios errors.
+export function extractServerDeletionError(
+  error: unknown,
+  fallback = 'Deleting the server failed',
+): {
+  message: string
+  failedStep: string | null
+  failedProjectName: string | null
+  steps: ServerDeletionStepResult[]
+} {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+    if (detail && typeof detail === 'object') {
+      return {
+        message: typeof detail.message === 'string' ? detail.message : fallback,
+        failedStep:
+          typeof detail.failed_step === 'string' ? detail.failed_step : null,
+        failedProjectName:
+          typeof detail.failed_project_name === 'string'
+            ? detail.failed_project_name
+            : null,
+        steps: Array.isArray(detail.steps) ? detail.steps : [],
+      }
+    }
+  }
+  return {
+    message: extractErrorMessage(error, fallback),
+    failedStep: null,
+    failedProjectName: null,
+    steps: [],
+  }
 }
