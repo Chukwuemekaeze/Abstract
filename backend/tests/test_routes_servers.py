@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import Server
+from app.services.ssh_service import KeyInstallVerificationFailed
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -78,6 +79,55 @@ async def test_install_key_uses_the_servers_own_key(
     _args, kwargs = mock_ssh.install_key.call_args
     assert kwargs["app_public_key"] == probe_b["app_public_key"]
     assert kwargs["app_public_key"] != probe_a["app_public_key"]
+
+
+async def test_install_key_sets_key_installed_on_success(
+    client, mock_ssh, db_session, test_user
+):
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={"password": "hunter2", "disable_password_auth": True},
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = await db_session.scalar(
+        select(Server).where(Server.id == probe["server_id"])
+    )
+    assert row.key_installed is True
+
+
+async def test_install_key_records_key_installed_on_partial_failure(
+    client, mock_ssh, db_session, test_user
+):
+    # The key is appended before the verification / disable-password-auth sub-steps,
+    # so a KeyInstallVerificationFailed means the key already landed on the box. The
+    # row stays pending but must remember the key is out there so a later cancel
+    # cleans it up.
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+    mock_ssh.install_key.side_effect = KeyInstallVerificationFailed(
+        "key based login failed after install"
+    )
+
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={"password": "hunter2", "disable_password_auth": True},
+    )
+    assert resp.status_code == 502, resp.text
+
+    row = await db_session.scalar(
+        select(Server).where(Server.id == probe["server_id"])
+    )
+    assert row.status == "pending_verification"
+    assert row.key_installed is True
 
 
 async def test_list_returns_only_current_user_servers(client, mock_ssh, db_session, test_user):
