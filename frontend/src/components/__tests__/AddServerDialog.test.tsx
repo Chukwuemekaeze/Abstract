@@ -127,12 +127,17 @@ describe('AddServerDialog', () => {
 
     // The dialog stays on the confirmation step and reveals the new-password field.
     const newPassword = await screen.findByLabelText('New root password')
-    // Install is gated until the new password is entered.
+    // Install is gated until the new password is entered and confirmed.
     const install = screen.getByRole('button', {
       name: /fingerprint matches, install key/i,
     })
     expect(install).toBeDisabled()
     await user.type(newPassword, 'a-fresh-strong-password')
+    expect(install).toBeDisabled()
+    await user.type(
+      screen.getByLabelText('Confirm new password'),
+      'a-fresh-strong-password',
+    )
     expect(install).toBeEnabled()
 
     await user.click(install)

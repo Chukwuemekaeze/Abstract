@@ -123,13 +123,19 @@ describe('ReRegisterServerDialog', () => {
       screen.getByRole('button', { name: /fingerprint matches, install key/i }),
     )
 
-    // The new-password field appears; install is gated on it.
+    // The new-password field appears; install is gated on it and its confirmation.
     const newPassword = await screen.findByLabelText('New root password')
     const install = screen.getByRole('button', {
       name: /fingerprint matches, install key/i,
     })
     expect(install).toBeDisabled()
     await user.type(newPassword, 'a-fresh-strong-password')
+    // Still gated until the confirmation matches.
+    expect(install).toBeDisabled()
+    await user.type(
+      screen.getByLabelText('Confirm new password'),
+      'a-fresh-strong-password',
+    )
     expect(install).toBeEnabled()
 
     await user.click(install)
@@ -142,6 +148,40 @@ describe('ReRegisterServerDialog', () => {
         }),
       ),
     )
+  })
+
+  it('keeps install disabled and warns when the new passwords do not match', async () => {
+    const user = userEvent.setup()
+    post.mockResolvedValueOnce({
+      data: {
+        server_id: 'srv-1',
+        fingerprint_sha256: 'SHA256:newfingerprint999',
+        app_public_key: 'ssh-ed25519 AAAANEW abstract-new',
+      },
+    })
+    post.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: { code: 'password_change_required' } } },
+    })
+
+    renderWithProviders(<ReRegisterServerDialog />)
+    openDialog()
+
+    await user.click(await screen.findByRole('button', { name: /continue/i }))
+    await user.type(await screen.findByLabelText('Password'), 'expired-pw')
+    await user.click(
+      screen.getByRole('button', { name: /fingerprint matches, install key/i }),
+    )
+
+    await user.type(
+      await screen.findByLabelText('New root password'),
+      'a-fresh-strong-password',
+    )
+    await user.type(screen.getByLabelText('Confirm new password'), 'does-not-match')
+
+    expect(screen.getByText(/passwords do not match/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /fingerprint matches, install key/i }),
+    ).toBeDisabled()
   })
 
   it('shows a retry on a failed re-probe without calling install', async () => {
