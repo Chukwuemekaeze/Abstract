@@ -313,6 +313,11 @@ class ExpiredConn(FakeConn):
 
 def test_password_change_client_maps_prompts_to_old_and_new():
     client = ssh_mod._PasswordChangeClient("OLDPASS", "NEWPASS")
+    # Plain password method: the server asks for a change during auth.
+    assert client.password_change_requested("New password: ", "") == (
+        "OLDPASS",
+        "NEWPASS",
+    )
     assert client.kbdint_auth_requested() == ""
     # The login prompt and the "current password" re-prompt take the old password.
     assert client.kbdint_challenge_received("", "", "", [("Password:", False)]) == [
@@ -382,16 +387,18 @@ async def test_install_key_with_new_password_uses_kbdint_change_connection(mocke
         new_password="freshpass",
     )
 
-    # The change connection forces keyboard-interactive (no plain password method) and
-    # wires up the PAM prompt handler.
+    # The change connection leaves both auth methods enabled (so the server can drive the
+    # change via either the password method or keyboard-interactive) and wires up the PAM
+    # prompt handler that answers old/new to both.
     change_call = connect_mock.call_args_list[0]
-    assert change_call.kwargs["password_auth"] is False
+    assert change_call.kwargs.get("password_auth") is not False
     assert change_call.kwargs["kbdint_auth"] is True
     assert callable(change_call.kwargs["client_factory"])
     factory = change_call.kwargs["client_factory"]()
     assert isinstance(factory, ssh_mod._PasswordChangeClient)
 
-    # Then the normal install sequence runs and key login is verified.
+    # The change completed during auth, so the install runs on this session (no PTY,
+    # no reconnect) and key login is verified.
     joined = "\n".join(conn.commands)
     assert "authorized_keys" in joined
     assert "whoami" in conn.commands
@@ -419,6 +426,157 @@ async def test_install_key_with_new_password_surfaces_rejection(mocker):
             disable_password_auth=False,
             new_password="weak",
         )
+
+
+class FakeStdout:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+
+    async def read(self, _n):
+        return self._chunks.pop(0) if self._chunks else ""
+
+
+class FakeStdin:
+    def __init__(self):
+        self.writes: list[str] = []
+
+    def write(self, data):
+        self.writes.append(data)
+
+    def write_eof(self):
+        pass
+
+
+class FakeProcess:
+    """Stands in for the PTY session asyncssh.create_process returns, replaying the
+    prompts a login-shell forced password change emits."""
+
+    def __init__(self, chunks):
+        self.stdout = FakeStdout(chunks)
+        self.stdin = FakeStdin()
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class SessionChauthtokConn(FakeConn):
+    """A box that authenticates the old password but defers the expired-password change
+    to the login shell: the first install command fails with the expiry signature, and
+    the change is driven over the PTY returned by create_process."""
+
+    def __init__(self, process):
+        super().__init__()
+        self.process = process
+
+    async def run(self, command, check=False):
+        if "mkdir" in command:
+            return FakeProcResult(stderr=EXPIRED_WARNING, exit_status=1)
+        return await super().run(command, check=check)
+
+    async def create_process(self, term_type=None):
+        return self.process
+
+
+async def test_install_key_drives_session_level_change_over_pty(mocker):
+    process = FakeProcess(
+        [
+            "You are required to change your password immediately.\r\n"
+            "(current) UNIX password: ",
+            "\r\nNew password: ",
+            "\r\nRetype new password: ",
+            "\r\npasswd: password updated successfully\r\n",
+        ]
+    )
+    expired = SessionChauthtokConn(process)
+    clean = FakeConn(whoami="root")  # reconnect + key-verify land here
+    mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    connect_mock = mocker.patch.object(
+        ssh_mod.asyncssh,
+        "connect",
+        side_effect=[FakeConnect(expired), FakeConnect(clean), FakeConnect(clean)],
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    await SSHService().install_key(
+        server=FakeServer(),
+        password_from_client="expired",
+        app_public_key="ssh-ed25519 AAAAAPPKEY app-deploy-x",
+        app_private_key=b"PRIVATEKEYBYTES",
+        disable_password_auth=False,
+        new_password="freshpass",
+    )
+
+    # The PTY conversation answered current -> old, new/retype -> new.
+    assert process.stdin.writes == ["expired\n", "freshpass\n", "freshpass\n"]
+    assert process.closed is True
+    # After the change we reconnect as the *new* password and install there.
+    reconnect_call = connect_mock.call_args_list[1]
+    assert reconnect_call.kwargs["password"] == "freshpass"
+    assert "authorized_keys" in "\n".join(clean.commands)
+    assert "whoami" in clean.commands
+
+
+def test_looks_like_shell_prompt():
+    assert ssh_mod._looks_like_shell_prompt("root@ubuntu-s-1vcpu-512mb:~# ")
+    assert ssh_mod._looks_like_shell_prompt("deploy@web1:~$")
+    # A passwd prompt is not a shell prompt.
+    assert not ssh_mod._looks_like_shell_prompt("(current) unix password: ")
+    assert not ssh_mod._looks_like_shell_prompt("new password: ")
+
+
+class FalsePositiveExpiryConn(FakeConn):
+    """The box is healthy (auth landed us at a shell) but the first install command
+    happened to fail with an expiry-looking message. Opening a PTY yields only a ready
+    shell prompt, so no change is actually being forced."""
+
+    def __init__(self, process):
+        super().__init__()
+        self.process = process
+
+    async def run(self, command, check=False):
+        if "mkdir" in command:
+            return FakeProcResult(
+                stderr="You are required to change your password", exit_status=1
+            )
+        return await super().run(command, check=check)
+
+    async def create_process(self, term_type=None):
+        return self.process
+
+
+async def test_install_key_reraises_when_pty_finds_a_ready_shell(mocker):
+    # The PTY drops straight to a shell prompt: no forced change, so we must surface the
+    # real install failure instead of hanging or falsely reconnecting as the new password.
+    process = FakeProcess(
+        ["\r\n\x1b[?2004hroot@ubuntu-s-1vcpu-512mb-10gb-fra1:~# "]
+    )
+    conn = FalsePositiveExpiryConn(process)
+    mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    connect_mock = mocker.patch.object(
+        ssh_mod.asyncssh, "connect", return_value=FakeConnect(conn)
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    with pytest.raises(ssh_mod.KeyInstallVerificationFailed):
+        await SSHService().install_key(
+            server=FakeServer(),
+            password_from_client="expired",
+            app_public_key="ssh-ed25519 AAAAAPPKEY app-deploy-x",
+            app_private_key=b"PRIVATEKEYBYTES",
+            disable_password_auth=False,
+            new_password="freshpass",
+        )
+
+    # No reconnect as the new password happened, and we did not answer any prompt.
+    assert connect_mock.call_count == 1
+    assert process.stdin.writes == []
 
 
 async def test_get_connection_flags_key_mismatch_on_host_key_change(mocker):

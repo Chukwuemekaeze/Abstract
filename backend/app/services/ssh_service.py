@@ -12,6 +12,7 @@ All methods are async. No paramiko, no thread pools.
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -84,10 +85,12 @@ class PasswordChangeRequired(Exception):
 # The PAM/sshd signature for an account whose password must be changed before any
 # command will run. Rebuilt DO droplets arrive with the root password pre-expired
 # ("chage -d 0"), so the first command over a plain password session fails with this.
+# Kept specific: a bare "new password" also appears in unrelated shell output and would
+# false-positive us into the interactive-change path on a perfectly healthy box.
 _PASSWORD_EXPIRED_SIGNATURES = (
     "password has expired",
     "password change required",
-    "new password",
+    "you are required to change your password",
 )
 
 
@@ -97,15 +100,36 @@ def _is_password_expired(text: str) -> bool:
 
 
 class _PasswordChangeClient(asyncssh.SSHClient):
-    """Answers the keyboard-interactive (PAM) conversation OpenSSH runs when a password
-    is expired, so the forced change happens during authentication with no TTY. The
-    login prompt is answered with the old password; the "New password:" / "Retype new
-    password:" chauthtok prompts with the new one. A non-expired account just sees a
-    single "Password:" challenge answered with the old password (no change)."""
+    """Answers the forced password change OpenSSH runs when an account's password is
+    expired, so the change completes during authentication with no TTY. OpenSSH exposes
+    this in two ways depending on the server's PAM/auth config, and we answer both:
+
+      - the plain *password* method: the server sends PASSWD_CHANGEREQ and asyncssh calls
+        password_change_requested(), to which we return (old, new).
+      - keyboard-interactive (PAM): the chauthtok arrives as challenge prompts; the login
+        / "(current) UNIX password:" prompt is answered with the old password, the
+        "New password:" / "Retype new password:" prompts with the new one.
+
+    A non-expired account just sees a single "Password:" challenge answered with the old
+    password (no change). If neither auth-time mechanism fires, the server defers the
+    change to a login shell; SSHService drives that over a PTY separately."""
 
     def __init__(self, old_password: str, new_password: str):
         self._old = old_password
         self._new = new_password
+
+    def password_change_requested(
+        self, prompt: str, lang: str
+    ) -> tuple[str, str]:
+        # Plain password method: the account's password is expired. Return the old and
+        # new passwords so asyncssh performs the change during authentication.
+        return self._old, self._new
+
+    def password_changed(self) -> None:
+        logger.info("Expired VPS password changed during authentication.")
+
+    def password_change_failed(self) -> None:
+        logger.warning("Server rejected the new password during authentication.")
 
     def kbdint_auth_requested(self) -> str:
         # Empty string: let the server pick the PAM submethods.
@@ -166,6 +190,100 @@ async def _run_checked(conn: asyncssh.SSHClientConnection, command: str):
             f"{(result.stderr or '').strip()}"
         )
     return result
+
+
+# Success / failure markers a login-shell chauthtok prints once the passwd conversation
+# finishes. Matched case-insensitively against the accumulated PTY output.
+_PASSWORD_CHANGE_SUCCESS = ("successfully", "password updated", "password changed")
+_PASSWORD_CHANGE_FAILURE = (
+    "authentication token manipulation error",
+    "bad password",
+    "password unchanged",
+    "too short",
+    "too simple",
+)
+# Seconds to wait for each prompt/result while driving the interactive change.
+_PTY_PROMPT_TIMEOUT = 20.0
+
+
+def _looks_like_shell_prompt(tail: str) -> bool:
+    """True when the PTY tail is a ready interactive shell prompt rather than a passwd
+    prompt: e.g. "root@ubuntu-...:~#" or "user@host:~$". If we see this the account is
+    NOT being forced to change its password, so there is nothing to drive."""
+    stripped = tail.rstrip()
+    return stripped.endswith(("#", "$")) and (":~" in stripped or "@" in stripped)
+
+
+async def _change_expired_password_interactively(
+    conn: asyncssh.SSHClientConnection, old_password: str, new_password: str
+) -> bool:
+    """Drive a login-shell `passwd`-style forced change over a PTY.
+
+    Some servers (freshly rebuilt DigitalOcean droplets among them) do not perform the
+    expired-password chauthtok during authentication; they authenticate the old password
+    and then force the change in the login shell, re-prompting for the *current* password
+    before asking for the new one twice. asyncssh's auth-time hooks never see this, so we
+    open a real PTY and answer the prompts ourselves: current -> old, new/retype -> new.
+
+    Returns True if it drove the change to completion, or False if the box dropped us
+    straight at a ready shell prompt (no change was actually required — the earlier
+    expiry signal was a false positive). Raises KeyInstallVerificationFailed only when
+    the server actively rejects the new password (too weak, wrong current password).
+    """
+    process = await conn.create_process(term_type="xterm")
+    accumulated = ""
+    changed = False
+    # A single prompt may need more than one write (current, new, retype), so keep
+    # reading until we see a success/failure marker, a shell prompt, or run out of time.
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    process.stdout.read(1024), timeout=_PTY_PROMPT_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                # Nothing more is coming. If we never saw a passwd prompt, treat it as
+                # "no change required" rather than hanging; the caller re-raises the real
+                # underlying error. If we did drive a change, the success check below
+                # decides the outcome.
+                break
+            if chunk == "":
+                break  # EOF: shell closed. Fall through to the outcome check below.
+            accumulated += chunk
+            lowered = accumulated.lower()
+
+            if any(sig in lowered for sig in _PASSWORD_CHANGE_FAILURE):
+                raise KeyInstallVerificationFailed(
+                    "The server rejected the new password (it may be too weak, or the "
+                    "current password is wrong). Choose a different password and retry.\n"
+                    f"{accumulated.strip()[-500:]}"
+                )
+            if any(sig in lowered for sig in _PASSWORD_CHANGE_SUCCESS):
+                changed = True
+                break
+
+            # Answer whichever prompt the tail of the output is showing. Reset the buffer
+            # after each write so the same prompt is not answered twice.
+            tail = lowered.rsplit("\n", 1)[-1]
+            if "new password" in tail:
+                process.stdin.write(new_password + "\n")
+                accumulated = ""
+            elif "retype" in tail or "again" in tail or "re-enter" in tail:
+                process.stdin.write(new_password + "\n")
+                accumulated = ""
+            elif "unix password" in tail or (
+                "password" in tail and "@" not in tail
+            ):  # "(current) UNIX password:" or bare "Password:"
+                process.stdin.write(old_password + "\n")
+                accumulated = ""
+            elif _looks_like_shell_prompt(tail):
+                # Ready shell, no change being forced. Nothing to do here.
+                break
+    finally:
+        process.stdin.write_eof()
+        process.close()
+
+    return changed
 
 
 class SSHService:
@@ -285,9 +403,17 @@ class SSHService:
                         ) from exc
                     raise
         else:
-            # Forced-change path: authenticate over keyboard-interactive (PAM) so the
-            # expired-password change completes during auth with no TTY. password_auth
-            # is disabled so the plain-password method cannot succeed-without-changing.
+            # Forced-change path. A server can force the expired-password change in one of
+            # three ways, so we cover all of them:
+            #   1. plain password method (PASSWD_CHANGEREQ) -> answered by
+            #      _PasswordChangeClient.password_change_requested during auth.
+            #   2. keyboard-interactive (PAM) chauthtok -> answered by
+            #      kbdint_challenge_received during auth.
+            #   3. login-shell chauthtok -> auth succeeds with the old password, then the
+            #      shell forces the change; we drive it over a PTY, then reconnect with the
+            #      new password to install the key on a clean session.
+            # Both auth methods are left enabled so asyncssh answers whichever the server
+            # negotiates; the client_factory supplies the old/new passwords to both hooks.
             try:
                 async with asyncssh.connect(
                     host=server.host,
@@ -297,14 +423,50 @@ class SSHService:
                         password_from_client, new_password
                     ),
                     password=password_from_client,
-                    password_auth=False,
                     kbdint_auth=True,
                     client_keys=None,
                     known_hosts=known_hosts,
                 ) as conn:
-                    await self._write_key_and_harden(
-                        conn, server, app_public_key, disable_password_auth
-                    )
+                    try:
+                        # Cases 1 & 2: the change already completed during auth, so this
+                        # session is authenticated as the new password. Install directly.
+                        await self._write_key_and_harden(
+                            conn, server, app_public_key, disable_password_auth
+                        )
+                    except KeyInstallVerificationFailed as exc:
+                        if not _is_password_expired(str(exc)):
+                            raise
+                        # Case 3: the change may not have been done at auth. Drive the
+                        # login-shell chauthtok over a PTY. If it reports no change was
+                        # actually being forced (a ready shell), the expiry signal was a
+                        # false positive, so re-raise the real install failure instead of
+                        # silently "succeeding". Otherwise reconnect as the now-current
+                        # password and run the install once on a clean session.
+                        changed = await _change_expired_password_interactively(
+                            conn, password_from_client, new_password
+                        )
+                        if not changed:
+                            raise KeyInstallVerificationFailed(
+                                "The server reported an expired password but then "
+                                "presented a normal shell instead of a change prompt, so "
+                                "the key install could not complete. The password may "
+                                "already have been changed; retry with the current "
+                                "password and leave the new-password field blank."
+                            ) from exc
+                        async with asyncssh.connect(
+                            host=server.host,
+                            port=server.port,
+                            username=server.username,
+                            password=new_password,
+                            client_keys=None,
+                            known_hosts=known_hosts,
+                        ) as changed_conn:
+                            await self._write_key_and_harden(
+                                changed_conn,
+                                server,
+                                app_public_key,
+                                disable_password_auth,
+                            )
             except asyncssh.PermissionDenied as exc:
                 raise KeyInstallVerificationFailed(
                     "The server rejected the new password (it may be too weak, or the "

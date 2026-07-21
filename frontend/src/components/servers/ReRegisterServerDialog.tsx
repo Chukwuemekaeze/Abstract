@@ -66,6 +66,25 @@ function ReRegisterDialogOpen({ serverId }: { serverId: string }) {
   // stay on the confirmation step and reveal a "New password" field for the retry.
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false)
   const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
+
+  // Client-side validation for the new password (only matters once the VPS forces a
+  // change). The server is the real authority, but catching mismatches/weak passwords
+  // here avoids setting a root password the user cannot repeat.
+  const newPasswordError = !passwordChangeRequired
+    ? null
+    : newPassword.length > 0 && newPassword.length < 8
+      ? 'Use at least 8 characters.'
+      : newPassword.length > 0 && newPassword === password
+        ? 'The new password must differ from the current one.'
+        : confirmNewPassword.length > 0 && confirmNewPassword !== newPassword
+          ? 'The passwords do not match.'
+          : null
+  const newPasswordValid =
+    !passwordChangeRequired ||
+    (newPassword.length >= 8 &&
+      newPassword !== password &&
+      newPassword === confirmNewPassword)
 
   // On the done step, auto close after a short success pause.
   useEffect(() => {
@@ -205,7 +224,7 @@ function ReRegisterDialogOpen({ serverId }: { serverId: string }) {
             fingerprint={fingerprint}
             onConfirm={handleInstall}
             onCancel={close}
-            busy={!password || (passwordChangeRequired && !newPassword)}
+            busy={!password || !newPasswordValid}
           >
             <div className="flex flex-col gap-2">
               <Label htmlFor="reregister-password">
@@ -238,6 +257,21 @@ function ReRegisterDialogOpen({ serverId }: { serverId: string }) {
                   autoComplete="off"
                   required
                 />
+                <Label htmlFor="reregister-confirm-new-password">
+                  Confirm new password
+                </Label>
+                <Input
+                  id="reregister-confirm-new-password"
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="Retype the new password"
+                  autoComplete="off"
+                  required
+                />
+                {newPasswordError && (
+                  <p className="text-destructive text-xs">{newPasswordError}</p>
+                )}
               </div>
             )}
             <div className="flex items-center gap-2">
