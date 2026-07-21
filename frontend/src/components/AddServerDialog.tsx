@@ -47,6 +47,25 @@ export function AddServerDialog() {
   // Kept local so the new password is never persisted, like the password itself.
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false)
   const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
+
+  // Client-side validation for the new password (only matters once the VPS forces a
+  // change). The server is the real authority, but catching mismatches/weak passwords
+  // here avoids setting a root password the user cannot repeat.
+  const newPasswordError = !passwordChangeRequired
+    ? null
+    : newPassword.length > 0 && newPassword.length < 8
+      ? 'Use at least 8 characters.'
+      : newPassword.length > 0 && newPassword === formData.password
+        ? 'The new password must differ from the current one.'
+        : confirmNewPassword.length > 0 && confirmNewPassword !== newPassword
+          ? 'The passwords do not match.'
+          : null
+  const newPasswordValid =
+    !passwordChangeRequired ||
+    (newPassword.length >= 8 &&
+      newPassword !== formData.password &&
+      newPassword === confirmNewPassword)
 
   // The dialog is open for every step except idle.
   const isOpen = step !== 'idle'
@@ -56,6 +75,7 @@ export function AddServerDialog() {
   const handleClose = () => {
     setPasswordChangeRequired(false)
     setNewPassword('')
+    setConfirmNewPassword('')
     close()
   }
 
@@ -74,6 +94,7 @@ export function AddServerDialog() {
     setError(null)
     setPasswordChangeRequired(false)
     setNewPassword('')
+    setConfirmNewPassword('')
     try {
       const result = await probeMutation.mutateAsync({
         name: formData.name,
@@ -222,7 +243,7 @@ export function AddServerDialog() {
             fingerprint={pendingServer.fingerprint}
             onConfirm={handleInstall}
             onCancel={handleClose}
-            busy={!formData.password || (passwordChangeRequired && !newPassword)}
+            busy={!formData.password || !newPasswordValid}
           >
             <div className="flex flex-col gap-2">
               <Label htmlFor="password">
@@ -255,6 +276,19 @@ export function AddServerDialog() {
                   autoComplete="off"
                   required
                 />
+                <Label htmlFor="confirm-new-password">Confirm new password</Label>
+                <Input
+                  id="confirm-new-password"
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="Retype the new password"
+                  autoComplete="off"
+                  required
+                />
+                {newPasswordError && (
+                  <p className="text-destructive text-xs">{newPasswordError}</p>
+                )}
               </div>
             )}
             <div className="flex items-center gap-2">
