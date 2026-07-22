@@ -32,19 +32,6 @@ class InstallKeyRequest(BaseModel):
 _LINUX_USERNAME = r"^[a-z_][a-z0-9_-]*$"
 
 
-class ReprobeRequest(BaseModel):
-    """Re-registration (host key changed / key_mismatch) probe request.
-
-    A rebuilt VPS is almost always root + password again, so username defaults to
-    root but stays editable for images whose default account differs. Same Linux
-    username rules as the sudo user, capped at 32 chars.
-    """
-
-    username: str = Field(
-        default="root", min_length=1, max_length=32, pattern=_LINUX_USERNAME
-    )
-
-
 class CreateSudoUserRequest(BaseModel):
     sudo_user_name: str = Field(min_length=1, max_length=32, pattern=_LINUX_USERNAME)
 

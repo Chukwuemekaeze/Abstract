@@ -34,7 +34,6 @@ from app.schemas.servers import (
     DeleteServerResponse,
     InstallKeyRequest,
     ProbeResponse,
-    ReprobeRequest,
     ServerDeletionPreviewProject,
     ServerDeletionPreviewResponse,
     ServerResponse,
@@ -52,7 +51,6 @@ from app.services.server_deletion_service import (
     cancel_registration,
     delete_server,
 )
-from app.services.server_recovery_service import reprobe_for_reregistration
 from app.services.ssh_service import (
     HostKeyChangedDuringInstall,
     HostKeyMismatch,
@@ -196,59 +194,6 @@ async def install_key(
     await db.refresh(server)
 
     return ServerResponse.model_validate(server)
-
-
-@router.post("/{server_id}/reprobe", response_model=ProbeResponse)
-async def reprobe_server(
-    body: ReprobeRequest,
-    server: Server = Depends(get_owned_server),
-    current_user: User = Depends(get_current_user),
-    session_id: str = Depends(get_current_session_id),
-    db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis),
-    ssh: SSHService = Depends(get_ssh_service),
-    key_provider: KeyProvider = Depends(get_key_provider_dep),
-    clerk: Clerk = Depends(get_clerk_client),
-    github: GithubService = Depends(get_github_service),
-) -> ProbeResponse:
-    """Start re-registration for a server whose host key changed (TOFU recovery).
-
-    Only valid while the server is key_mismatch — the sole entry point back to trust,
-    so a changed fingerprint is never accepted silently. Re-probes the current host to
-    capture the new host key, wipes the stale state a rebuild leaves behind (the old app
-    key, hardening flags, and project/deployment records), generates a fresh app keypair,
-    and moves the row back to pending_verification. Returns the new fingerprint for the
-    user to confirm and the new app public key to install. install_key then finishes the
-    recovery with the current VPS password, exactly like a first registration.
-    """
-    if server.status != "key_mismatch":
-        raise HTTPException(
-            400,
-            "Re-registration is only available for a server whose host key has "
-            f"changed (status: {server.status}).",
-        )
-
-    try:
-        fingerprint, app_public_key = await reprobe_for_reregistration(
-            server=server,
-            username=body.username,
-            current_user=current_user,
-            session_id=session_id,
-            db=db,
-            ssh=ssh,
-            redis=redis,
-            key_provider=key_provider,
-            clerk=clerk,
-            github=github,
-        )
-    except ProbeError as exc:
-        raise HTTPException(502, str(exc)) from exc
-
-    return ProbeResponse(
-        server_id=server.id,
-        fingerprint_sha256=fingerprint,
-        app_public_key=app_public_key,
-    )
 
 
 @router.post("/{server_id}/cancel", response_model=DeleteServerResponse)
