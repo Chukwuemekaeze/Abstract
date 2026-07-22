@@ -55,6 +55,9 @@ class ServerResponse(BaseModel):
     port: int
     username: str
     status: str
+    # Live re-registration progress ('none' when idle). The re-register modal polls
+    # this to surface friendly progress text while /reregister/complete runs.
+    reregistration_state: str
     active_operation: str | None
     fingerprint_sha256: str | None
     host_key_type: str | None

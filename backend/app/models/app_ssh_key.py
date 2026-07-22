@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, String, func, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,6 +49,14 @@ class AppSshKey(Base):
     )
     encryption_key_id: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text("'env-v1'")
+    )
+    # False while a re-registration has generated and inserted a fresh keypair but has
+    # not yet verified key-based login against the rebuilt host. A pending key lets a
+    # retried /reregister/complete authenticate with it and skip straight to finishing,
+    # making retries idempotent. Promoted to true once the smoke test passes. Normal
+    # registration inserts an already-active key.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
