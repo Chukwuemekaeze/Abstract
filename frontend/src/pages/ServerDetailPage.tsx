@@ -32,7 +32,7 @@ import { useProjectsByServer } from '@/api/projects'
 import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
 import { DeleteServerDialog } from '@/components/servers/DeleteServerDialog'
-import { ReRegisterServerDialog } from '@/components/servers/ReRegisterServerDialog'
+import { ReregisterDialog } from '@/components/servers/ReregisterDialog'
 import { ProjectCard } from '@/components/projects/ProjectCard'
 import {
   OperationCard,
@@ -48,7 +48,7 @@ import { useAddServerStore } from '@/store/addServerStore'
 import { useCancelRegistrationDialogStore } from '@/store/cancel-registration-dialog'
 import { useNewProjectStore } from '@/store/newProjectStore'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
-import { useReRegisterServerDialogStore } from '@/store/reregister-server-dialog'
+import { useReregisterDialogStore } from '@/store/reregisterDialogStore'
 
 // Mirrors the backend Linux-username validation (schemas/servers.py).
 const USERNAME_PATTERN = /^[a-z_][a-z0-9_-]*$/
@@ -164,7 +164,7 @@ function PendingServerDetail({ server }: { server: Server }) {
 // re-register against the new fingerprint, or remove the stale record.
 function KeyMismatchServerDetail({ server }: { server: Server }) {
   const [showFullFingerprint, setShowFullFingerprint] = useState(false)
-  const openReRegister = useReRegisterServerDialogStore((s) => s.openWith)
+  const openReRegister = useReregisterDialogStore((s) => s.openWith)
   const openDeleteServer = useDeleteServerDialogStore((s) => s.openWith)
 
   const status = STATUS_META[server.status]
@@ -235,7 +235,7 @@ function KeyMismatchServerDetail({ server }: { server: Server }) {
         </Button>
       </div>
 
-      <ReRegisterServerDialog />
+      <ReregisterDialog />
       <DeleteServerDialog />
     </div>
   )

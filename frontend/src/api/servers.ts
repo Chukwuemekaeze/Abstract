@@ -13,6 +13,16 @@ import { projectKeys } from '@/api/projects'
 // Mirrors the backend server status check constraint.
 export type ServerStatus = 'pending_verification' | 'verified' | 'key_mismatch'
 
+// Mirrors the backend reregistration_state machine.
+export type ReregistrationState =
+  | 'none'
+  | 'awaiting_confirmation'
+  | 'probing'
+  | 'exchanging'
+  | 'verifying'
+  | 'installing_key'
+  | 'done'
+
 // Shape returned by the backend ServerResponse schema. Sensitive fields
 // (host_key, encrypted_private_key) are deliberately never sent by the backend,
 // so they are absent here too.
@@ -23,6 +33,9 @@ export interface Server {
   port: number
   username: string
   status: ServerStatus
+  // Live re-registration progress ('none' when idle). The re-register modal polls this
+  // to show friendly progress text while /reregister/complete runs.
+  reregistration_state: ReregistrationState
   // The single in-flight server-level operation, or null when idle. Currently
   // only 'deleting'. When set, the detail page locks its mutation UI.
   active_operation: 'deleting' | null
@@ -71,12 +84,6 @@ export interface InstallKeyRequest {
   // Sent only on a retry when the VPS forced a password change on first login (an
   // expired password). Used once to complete the change; never stored.
   new_password?: string
-}
-
-// Body for POST /servers/{id}/reprobe (re-registration after a host key change).
-// A rebuilt VPS is usually root + password again, hence the default.
-export interface ReprobeRequest {
-  username: string
 }
 
 // Centralized query keys so queries and the mutations that invalidate them never
@@ -147,27 +154,134 @@ export function useInstallKeyMutation() {
   })
 }
 
-// Re-registration step one, for a server whose host key changed (status
-// key_mismatch). Re-probes the current host, wipes the stale state a rebuild left
-// behind (old app key, hardening flags, project records), and moves the row back to
-// pending_verification, returning the new fingerprint + app key. Step two reuses
-// useInstallKeyMutation. Invalidates the list and this server's detail.
-export function useReprobeServerMutation() {
+// --- Re-registration (host key changed / VPS rebuilt) ---------------------
+
+// Returned by POST /servers/{id}/reregister/probe. Only the fingerprint is surfaced;
+// SSH keys stay internal and are never named in the UI.
+export interface ReregisterProbeResponse {
+  server_id: string
+  fingerprint_sha256: string
+}
+
+// The structured error codes the re-registration endpoints return. retryable marks a
+// transient reachability failure the client may retry with backoff.
+export type ReregistrationErrorCode =
+  | 'HOST_KEY_CHANGED_AGAIN'
+  | 'AUTH_FAILED'
+  | 'PASSWORD_AUTH_UNAVAILABLE'
+  | 'CHANGE_INCOMPLETE'
+  | 'LOCKED_OUT'
+  | 'NETWORK_UNREACHABLE'
+
+export interface ReregistrationError {
+  code: ReregistrationErrorCode | null
+  message: string
+  retryable: boolean
+}
+
+// Fallback copy per code, and whether a code is retryable, so the UI stays sensible
+// even if the backend detail is missing. The backend sends the same user-facing copy,
+// which takes precedence when present.
+const REREGISTRATION_ERROR_COPY: Record<
+  ReregistrationErrorCode,
+  { message: string; retryable: boolean }
+> = {
+  HOST_KEY_CHANGED_AGAIN: {
+    message:
+      "The server's identity changed again during setup. Start over and re-check the fingerprint.",
+    retryable: false,
+  },
+  AUTH_FAILED: {
+    message:
+      'That password did not work. Double-check the password from your provider and try again.',
+    retryable: false,
+  },
+  PASSWORD_AUTH_UNAVAILABLE: {
+    message:
+      "This server does not accept password logins. Reset the root password from your provider's control panel, then try again.",
+    retryable: false,
+  },
+  CHANGE_INCOMPLETE: {
+    message:
+      "Your provider required a password reset and it could not be completed automatically. Reset the password from your provider's control panel and try again.",
+    retryable: false,
+  },
+  LOCKED_OUT: {
+    message:
+      "Abstract could not complete the login. Reset the root password from your provider's control panel and try again.",
+    retryable: false,
+  },
+  NETWORK_UNREACHABLE: {
+    message: 'Could not reach the server. Check that it is powered on and try again.',
+    retryable: true,
+  },
+}
+
+// Pull the structured re-registration error (code, plain-language message, retryable)
+// from a failed request, falling back to the code's canonical copy or a generic
+// message for non-structured/non-axios errors.
+export function extractReregistrationError(
+  error: unknown,
+  fallback = 'Re-registration failed.',
+): ReregistrationError {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+    if (detail && typeof detail === 'object' && typeof detail.code === 'string') {
+      const code = detail.code as ReregistrationErrorCode
+      const canonical = REREGISTRATION_ERROR_COPY[code]
+      return {
+        code,
+        message:
+          typeof detail.message === 'string'
+            ? detail.message
+            : (canonical?.message ?? fallback),
+        retryable:
+          typeof detail.retryable === 'boolean'
+            ? detail.retryable
+            : (canonical?.retryable ?? false),
+      }
+    }
+  }
+  return { code: null, message: extractErrorMessage(error, fallback), retryable: false }
+}
+
+// Re-registration step one: capture the rebuilt server's new host key and return the
+// new fingerprint for the user to confirm. Does not touch the trusted key yet.
+export function useReregisterProbeMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (serverId: string): Promise<ReregisterProbeResponse> => {
+      const { data } = await apiClient.post<ReregisterProbeResponse>(
+        `/servers/${serverId}/reregister/probe`,
+      )
+      return data
+    },
+    onSuccess: (_data, serverId) => {
+      qc.invalidateQueries({ queryKey: serverKeys.detail(serverId) })
+      qc.invalidateQueries({ queryKey: serverKeys.all })
+    },
+  })
+}
+
+// Re-registration step two: complete with the user's root password. The backend runs
+// the whole access engine and returns the server verified-but-unhardened. Invalidates
+// the list and detail so the page reflects the recovered state.
+export function useReregisterCompleteMutation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (args: {
       serverId: string
-      body: ReprobeRequest
-    }): Promise<ProbeResponse> => {
-      const { data } = await apiClient.post<ProbeResponse>(
-        `/servers/${args.serverId}/reprobe`,
-        args.body,
+      password: string
+    }): Promise<Server> => {
+      const { data } = await apiClient.post<Server>(
+        `/servers/${args.serverId}/reregister/complete`,
+        { password: args.password },
       )
       return data
     },
-    onSuccess: (_data, args) => {
+    onSuccess: (server) => {
       qc.invalidateQueries({ queryKey: serverKeys.all })
-      qc.invalidateQueries({ queryKey: serverKeys.detail(args.serverId) })
+      qc.invalidateQueries({ queryKey: serverKeys.detail(server.id) })
     },
   })
 }

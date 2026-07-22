@@ -28,6 +28,21 @@ if TYPE_CHECKING:
 
 SERVER_STATUSES = ("pending_verification", "verified", "key_mismatch")
 
+# Persisted state machine for the password-based re-registration a rebuilt VPS needs.
+# 'none' is idle (no re-registration in flight). The rest track an in-flight attempt so
+# a retried /complete resumes rather than restarts. Terminal failures are not states:
+# they surface as structured error codes to the client, leaving the row where it was so
+# the next attempt picks up.
+REREGISTRATION_STATES = (
+    "none",
+    "awaiting_confirmation",
+    "probing",
+    "exchanging",
+    "verifying",
+    "installing_key",
+    "done",
+)
+
 
 class Server(Base):
     __tablename__ = "servers"
@@ -35,6 +50,11 @@ class Server(Base):
         CheckConstraint(
             "status in ('pending_verification', 'verified', 'key_mismatch')",
             name="ck_servers_status",
+        ),
+        CheckConstraint(
+            "reregistration_state in ('none', 'awaiting_confirmation', 'probing', "
+            "'exchanging', 'verifying', 'installing_key', 'done')",
+            name="ck_servers_reregistration_state",
         ),
         Index("ix_servers_user_id_created_at", "user_id", text("created_at desc")),
     )
@@ -61,7 +81,29 @@ class Server(Base):
     host_key_type: Mapped[str | None] = mapped_column(String, nullable=True)
     fingerprint_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # The rebuilt host key captured at re-registration probe, held separately so the
+    # trusted host_key above is only overwritten once the fresh key-based smoke test
+    # proves the new identity. Cleared (promoted into host_key) when re-registration
+    # finishes. Sensitive, never serialized.
+    pending_host_key: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    pending_host_key_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    pending_fingerprint_sha256: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )
+
     status: Mapped[str] = mapped_column(String, nullable=False)
+    # Persisted re-registration state machine (see REREGISTRATION_STATES). 'none' when
+    # idle. Drives resumable, idempotent retries of the /reregister/complete flow.
+    reregistration_state: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'none'")
+    )
+    # Fernet-encrypted replacement root password generated during an in-flight forced
+    # password change. Written ahead (before it is sent to the server) so a crash mid
+    # exchange never loses the only working credential, and cleared once the new deploy
+    # key is verified. Sensitive, never serialized.
+    bootstrap_password: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
     # True once Abstract's public key has been written to the server's
     # authorized_keys during install_key. Set as soon as the append succeeds, even
     # if a later install sub-step (disable password auth, key-login verification)

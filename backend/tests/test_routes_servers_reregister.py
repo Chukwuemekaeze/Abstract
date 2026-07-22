@@ -1,247 +1,338 @@
-"""Route tests for POST /api/servers/{id}/reprobe (host key change recovery).
+"""Route tests for the password-based re-registration endpoints.
 
-DB backed (TEST_DATABASE_URL). SSH is the shared mock_ssh fixture (probe returns a new
-fingerprint, install_key/run_command succeed), GitHub and the Clerk OAuth token fetch
-used by the stale-project purge are mocked at the boundary. These assert the HTTP
-contract plus the DB side effects: the row moves back to pending_verification with a new
-host key and a fresh app key, and the stale hardening/project state is wiped — while a
-server that is not key_mismatch (and an unreachable host) is rejected without any change.
+The access engine's SSH work is stubbed at the route boundary so these focus on
+ownership, state gating, the persisted state machine, the bootstrap-password
+write-ahead, resumable idempotency, and error mapping. DB backed: skipped when
+TEST_DATABASE_URL is not set.
 """
 
-from datetime import datetime, timezone
+import os
 
 import pytest
 from sqlalchemy import select
 
-from app.clerk import get_clerk_client
-from app.deps.services import get_github_service
-from app.main import app
 from app.models import AppSshKey, Project, Server
-from app.services.ssh_service import ProbeError
+from app.services.key_provider import EnvKeyProvider
+from app.services.server_reregistration_service import ReregistrationError
+
 from tests.conftest import requires_db
-from tests.project_mocks import make_github
-from tests.run_publish_mocks import seed_project
 
 pytestmark = requires_db
 
-OLD_HOST_KEY = b"ssh-ed25519 AAAAOLDHOSTKEY"
-OLD_FINGERPRINT = "SHA256:oldfingerprintvalue"
-OLD_APP_PUBLIC_KEY = "ssh-ed25519 AAAAOLDAPPKEY abstract-old"
-NEW_FINGERPRINT = "SHA256:testfingerprintvalue"  # matches the mock_ssh probe result
+# The key mock_ssh.probe returns; the rebuilt host presents this at re-registration.
+PROBE_KEY = b"ssh-ed25519 AAAATESTKEY"
+TRUSTED_OLD_KEY = b"ssh-ed25519 TRUSTEDOLD"
 
 
-@pytest.fixture
-def github_clerk_env(mocker):
-    """Override GitHub + Clerk deps and patch the recovery service's OAuth token fetch,
-    so the best-effort deploy-key revocation runs without touching the network."""
-    github = make_github(mocker)
-    app.dependency_overrides[get_github_service] = lambda: github
-    app.dependency_overrides[get_clerk_client] = lambda: mocker.MagicMock()
-    mocker.patch(
-        "app.services.server_recovery_service.get_github_oauth_token",
-        mocker.AsyncMock(return_value="gho_test_token"),
-    )
-    yield github
-    app.dependency_overrides.pop(get_github_service, None)
-    app.dependency_overrides.pop(get_clerk_client, None)
+def _provider() -> EnvKeyProvider:
+    return EnvKeyProvider(os.environ["APP_MASTER_KEY"])
 
 
-async def _seed_key_mismatch_server(db_session, user, *, with_projects=0):
-    """A fully hardened, verified server that has since flipped to key_mismatch, plus its
-    app key and optionally some projects. Represents the state a rebuild leaves behind."""
+async def _seed_server(
+    db_session,
+    user,
+    *,
+    status="key_mismatch",
+    reregistration_state="none",
+    pending_host_key=None,
+    bootstrap_password=None,
+    key_is_active=True,
+    with_projects=0,
+    owner=None,
+) -> Server:
     server = Server(
-        user_id=user.id,
+        user_id=(owner or user).id,
         name="web1",
         host="203.0.113.10",
         port=22,
-        username="deploy",  # hardening had switched off root
-        host_key=OLD_HOST_KEY,
+        username="deploy",  # a prior hardening switched off root; a rebuild wiped it
+        host_key=TRUSTED_OLD_KEY,
         host_key_type="ssh-ed25519",
-        fingerprint_sha256=OLD_FINGERPRINT,
-        status="key_mismatch",
+        fingerprint_sha256="SHA256:oldtrusted",
+        status=status,
+        reregistration_state=reregistration_state,
+        pending_host_key=pending_host_key,
+        bootstrap_password=bootstrap_password,
         verification_source="tofu",
-        key_installed=True,
-        password_auth_disabled=True,
-        verified_at=datetime.now(timezone.utc),
         sudo_user_name="deploy",
-        root_login_disabled=True,
         firewall_enabled=True,
         docker_installed=True,
-        base_packages_installed=True,
-        nginx_installed=True,
-        swap_configured=True,
-        last_system_update_at=datetime.now(timezone.utc),
     )
     db_session.add(server)
     await db_session.commit()
     await db_session.refresh(server)
 
-    db_session.add(
-        AppSshKey(
-            server_id=server.id,
-            public_key=OLD_APP_PUBLIC_KEY,
-            encrypted_private_key=b"ciphertext",
-            key_type="ssh-ed25519",
-            encryption_key_id="env-v1",
-        )
+    provider = _provider()
+    encrypted = await provider.encrypt(b"OLDPRIVATEKEY")
+    app_key = AppSshKey(
+        server_id=server.id,
+        public_key="ssh-ed25519 AAAAOLDPUB abstract-server-old",
+        encrypted_private_key=encrypted,
+        key_type="ssh-ed25519",
+        encryption_key_id=provider.key_id,
+        is_active=key_is_active,
     )
-    await db_session.commit()
+    db_session.add(app_key)
 
     for i in range(with_projects):
-        await seed_project(
-            db_session, user.id, server, slug=f"proj{i}", repo_id=900 + i
+        db_session.add(
+            Project(
+                user_id=(owner or user).id,
+                server_id=server.id,
+                name=f"proj{i}",
+                slug=f"proj{i}",
+                github_repo_full_name=f"acme/proj{i}",
+                github_repo_id=1000 + i,
+                clone_path=f"/home/deploy/proj{i}",
+                runtime_status="running",
+            )
         )
-
+    await db_session.commit()
+    await db_session.refresh(server)
     return server
 
 
-async def test_reprobe_rejected_when_not_key_mismatch(
-    client, mock_ssh, github_clerk_env, db_session, test_user
-):
-    # A verified server is not eligible: re-registration is only for key_mismatch.
-    server = Server(
-        user_id=test_user.id,
-        name="ok",
-        host="203.0.113.20",
-        port=22,
-        username="root",
-        status="verified",
-        verification_source="tofu",
+def _stub_engine(mocker, *, resume_pending=False, resume_bootstrap=False):
+    """Stub the SSH-touching engine calls the route makes, leaving the DB-staging ones
+    (regenerate_pending_keypair, reset_projects_not_running) real."""
+    mocker.patch(
+        "app.routes.servers.try_resume_with_pending_key",
+        mocker.AsyncMock(return_value=resume_pending),
     )
-    db_session.add(server)
-    await db_session.commit()
-    await db_session.refresh(server)
+    mocker.patch(
+        "app.routes.servers.verify_password_for_resume",
+        mocker.AsyncMock(return_value=resume_bootstrap),
+    )
+    run = mocker.patch(
+        "app.routes.servers.run_exchange_and_verify",
+        mocker.AsyncMock(return_value="genpass"),
+    )
+    mocker.patch("app.routes.servers.install_public_key", mocker.AsyncMock())
+    mocker.patch(
+        "app.routes.servers.smoke_test_pending_key", mocker.AsyncMock(return_value=True)
+    )
+    mocker.patch("app.routes.servers.evict_stale_ssh_state", mocker.AsyncMock())
+    return run
 
-    resp = await client.post(f"/api/servers/{server.id}/reprobe", json={})
-    assert resp.status_code == 400, resp.text
-    mock_ssh.probe.assert_not_awaited()
+
+# --- ownership and state gating --------------------------------------------
 
 
-async def test_reprobe_resets_stale_state_and_replaces_key(
-    client, mock_ssh, github_clerk_env, db_session, test_user
+async def test_probe_rejects_non_owner(client, db_session, test_user, other_test_user):
+    server = await _seed_server(db_session, other_test_user, owner=other_test_user)
+    resp = await client.post(f"/api/servers/{server.id}/reregister/probe")
+    assert resp.status_code == 404
+
+
+async def test_endpoints_reject_when_not_mismatch_or_in_progress(
+    client, db_session, test_user, mock_ssh
 ):
-    server = await _seed_key_mismatch_server(db_session, test_user, with_projects=2)
+    server = await _seed_server(
+        db_session, test_user, status="verified", reregistration_state="none"
+    )
+    probe = await client.post(f"/api/servers/{server.id}/reregister/probe")
+    assert probe.status_code == 400
+    complete = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "p"}
+    )
+    assert complete.status_code == 400
+
+
+# --- probe -----------------------------------------------------------------
+
+
+async def test_probe_captures_pending_key_without_touching_trusted(
+    client, db_session, test_user, mock_ssh
+):
+    server = await _seed_server(db_session, test_user)
+    resp = await client.post(f"/api/servers/{server.id}/reregister/probe")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fingerprint_sha256"] == "SHA256:testfingerprintvalue"
+
+    await db_session.refresh(server)
+    assert server.pending_host_key == PROBE_KEY
+    assert server.host_key == TRUSTED_OLD_KEY  # trusted key untouched until the end
+    assert server.reregistration_state == "awaiting_confirmation"
+    assert server.status == "key_mismatch"
+
+
+# --- complete happy path (branch B, generated password) --------------------
+
+
+async def test_complete_promotes_and_resets_to_verified_unhardened(
+    client, db_session, test_user, mock_ssh, mocker
+):
+    server = await _seed_server(
+        db_session, test_user, pending_host_key=PROBE_KEY, with_projects=2
+    )
+    _stub_engine(mocker)
 
     resp = await client.post(
-        f"/api/servers/{server.id}/reprobe", json={"username": "root"}
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # New fingerprint is surfaced for confirmation and differs from the stale one.
-    assert body["fingerprint_sha256"] == NEW_FINGERPRINT
-    assert body["fingerprint_sha256"] != OLD_FINGERPRINT
-    assert body["app_public_key"].startswith("ssh-ed25519 ")
-    assert body["app_public_key"] != OLD_APP_PUBLIC_KEY
-    mock_ssh.probe.assert_awaited_once()
-    mock_ssh.evict_connection.assert_called_once()
+    assert body["status"] == "verified"
+    assert body["reregistration_state"] == "done"
 
-    # The row is back to a fresh pending_verification with the new host identity.
-    row = await db_session.scalar(select(Server).where(Server.id == server.id))
-    assert row.status == "pending_verification"
-    assert row.host_key == b"ssh-ed25519 AAAATESTKEY"  # mock_ssh probe host_key
-    assert row.fingerprint_sha256 == NEW_FINGERPRINT
-    assert row.username == "root"
-    # Stale registration + hardening state is cleared.
-    assert row.key_installed is False
-    assert row.password_auth_disabled is False
-    assert row.verified_at is None
-    assert row.sudo_user_name is None
-    assert row.root_login_disabled is False
-    assert row.firewall_enabled is False
-    assert row.docker_installed is False
-    assert row.base_packages_installed is False
-    assert row.nginx_installed is False
-    assert row.swap_configured is False
-    assert row.last_system_update_at is None
+    await db_session.refresh(server)
+    # Pending host key promoted to trusted, pending cleared.
+    assert server.host_key == PROBE_KEY
+    assert server.pending_host_key is None
+    assert server.bootstrap_password is None
+    # Verified but unhardened, back to root.
+    assert server.username == "root"
+    assert server.sudo_user_name is None
+    assert server.firewall_enabled is False
+    assert server.docker_installed is False
 
-    # Stale projects are gone; each one's GitHub deploy key was best-effort revoked.
-    remaining = (
-        await db_session.scalars(
-            select(Project).where(Project.server_id == server.id)
-        )
-    ).all()
-    assert remaining == []
-    assert github_clerk_env.delete_deploy_key.await_count == 2
-
-    # The app key row was replaced (new public key persisted, matching the response).
+    # A fresh, active keypair replaced the old one.
     app_key = await db_session.scalar(
         select(AppSshKey).where(AppSshKey.server_id == server.id)
     )
-    assert app_key is not None
-    assert app_key.public_key == body["app_public_key"]
-    assert app_key.public_key != OLD_APP_PUBLIC_KEY
+    assert app_key.is_active is True
+    assert app_key.public_key != "ssh-ed25519 AAAAOLDPUB abstract-server-old"
+
+    # Projects reset to not running, not deleted.
+    projects = (
+        await db_session.scalars(
+            select(Project).where(Project.server_id == server.id)
+        )
+    ).all()
+    assert len(projects) == 2
+    assert all(p.runtime_status == "never_started" for p in projects)
 
 
-async def test_reprobe_defaults_username_to_root(
-    client, mock_ssh, github_clerk_env, db_session, test_user
+# --- write-ahead -----------------------------------------------------------
+
+
+async def test_bootstrap_password_written_before_exchange(
+    client, db_session, test_user, mock_ssh, mocker
 ):
-    server = await _seed_key_mismatch_server(db_session, test_user)
-    resp = await client.post(f"/api/servers/{server.id}/reprobe", json={})
-    assert resp.status_code == 200, resp.text
+    server = await _seed_server(db_session, test_user, pending_host_key=PROBE_KEY)
 
-    row = await db_session.scalar(select(Server).where(Server.id == server.id))
-    assert row.username == "root"
+    captured = {}
 
+    async def fake_exchange(srv_arg, user_password, generated):
+        # By the time the exchange runs the write-ahead must be committed: the row
+        # already carries an encrypted bootstrap password and the exchanging state.
+        captured["state"] = srv_arg.reregistration_state
+        captured["bootstrap_set"] = srv_arg.bootstrap_password is not None
+        return generated
 
-async def test_full_reregistration_flow_returns_to_verified(
-    client, mock_ssh, github_clerk_env, db_session, test_user
-):
-    server = await _seed_key_mismatch_server(db_session, test_user, with_projects=1)
+    mocker.patch("app.routes.servers.try_resume_with_pending_key", mocker.AsyncMock(return_value=False))
+    mocker.patch("app.routes.servers.run_exchange_and_verify", side_effect=fake_exchange)
+    mocker.patch("app.routes.servers.install_public_key", mocker.AsyncMock())
+    mocker.patch("app.routes.servers.smoke_test_pending_key", mocker.AsyncMock(return_value=True))
+    mocker.patch("app.routes.servers.evict_stale_ssh_state", mocker.AsyncMock())
 
-    reprobe = await client.post(f"/api/servers/{server.id}/reprobe", json={})
-    assert reprobe.status_code == 200, reprobe.text
-
-    # Step two reuses the existing install_key path unchanged.
-    install = await client.post(
-        f"/api/servers/{server.id}/install_key",
-        json={"password": "hunter2", "disable_password_auth": True},
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
     )
-    assert install.status_code == 200, install.text
-    assert install.json()["status"] == "verified"
-    mock_ssh.install_key.assert_awaited_once()
-
-    row = await db_session.scalar(select(Server).where(Server.id == server.id))
-    assert row.status == "verified"
-    assert row.key_installed is True
-    projects = (
-        await db_session.scalars(
-            select(Project).where(Project.server_id == server.id)
-        )
-    ).all()
-    assert projects == []  # the rebuild's stale projects stayed wiped
+    assert resp.status_code == 200, resp.text
+    assert captured["state"] == "exchanging"
+    assert captured["bootstrap_set"] is True
+    # Cleared once the new key is verified.
+    await db_session.refresh(server)
+    assert server.bootstrap_password is None
 
 
-async def test_reprobe_unreachable_keeps_row_key_mismatch(
-    client, mock_ssh, github_clerk_env, db_session, test_user
+# --- resume / idempotency --------------------------------------------------
+
+
+async def test_complete_resumes_via_pending_key_without_exchange(
+    client, db_session, test_user, mock_ssh, mocker
 ):
-    server = await _seed_key_mismatch_server(db_session, test_user, with_projects=1)
-    mock_ssh.probe.side_effect = ProbeError("could not reach host")
+    # A prior attempt got as far as installing a pending keypair. The retry authenticates
+    # with it and skips straight to promotion; no exchange happens.
+    provider = _provider()
+    server = await _seed_server(
+        db_session,
+        test_user,
+        reregistration_state="installing_key",
+        pending_host_key=PROBE_KEY,
+        bootstrap_password=await provider.encrypt(b"genpass"),
+        key_is_active=False,
+    )
+    run = _stub_engine(mocker, resume_pending=True)
 
-    resp = await client.post(f"/api/servers/{server.id}/reprobe", json={})
-    assert resp.status_code == 502, resp.text
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
+    )
+    assert resp.status_code == 200, resp.text
+    run.assert_not_awaited()
 
-    # Nothing was touched: the row stays key_mismatch and the projects are intact so
-    # the user can retry once the box is reachable.
-    row = await db_session.scalar(select(Server).where(Server.id == server.id))
-    assert row.status == "key_mismatch"
-    assert row.fingerprint_sha256 == OLD_FINGERPRINT
-    projects = (
-        await db_session.scalars(
-            select(Project).where(Project.server_id == server.id)
-        )
-    ).all()
-    assert len(projects) == 1
+    await db_session.refresh(server)
+    assert server.reregistration_state == "done"
+    assert server.host_key == PROBE_KEY
+    app_key = await db_session.scalar(
+        select(AppSshKey).where(AppSshKey.server_id == server.id)
+    )
+    assert app_key.is_active is True
 
 
-async def test_key_mismatch_server_blocks_operations(
-    client, mock_ssh, db_session, test_user
+async def test_complete_resumes_via_bootstrap_password_without_exchange(
+    client, db_session, test_user, mock_ssh, mocker
 ):
-    """A key_mismatch server rejects operations up front (before any SSH), so the state
-    is a hard block, not just a failed connection."""
-    server = await _seed_key_mismatch_server(db_session, test_user)
+    # The forced change completed in a prior attempt but the key was never installed.
+    provider = _provider()
+    server = await _seed_server(
+        db_session,
+        test_user,
+        reregistration_state="exchanging",
+        pending_host_key=PROBE_KEY,
+        bootstrap_password=await provider.encrypt(b"genpass"),
+    )
+    run = _stub_engine(mocker, resume_pending=False, resume_bootstrap=True)
 
-    smoke = await client.post(f"/api/servers/{server.id}/smoke_test")
-    assert smoke.status_code == 400, smoke.text
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
+    )
+    assert resp.status_code == 200, resp.text
+    run.assert_not_awaited()  # bootstrap already works; no new exchange
+    await db_session.refresh(server)
+    assert server.reregistration_state == "done"
 
-    harden = await client.post(f"/api/servers/{server.id}/harden/update_system")
-    assert harden.status_code == 400, harden.text
+
+# --- error mapping ---------------------------------------------------------
+
+
+async def test_complete_maps_auth_failed_and_stays_resumable(
+    client, db_session, test_user, mock_ssh, mocker
+):
+    server = await _seed_server(db_session, test_user, pending_host_key=PROBE_KEY)
+    mocker.patch("app.routes.servers.try_resume_with_pending_key", mocker.AsyncMock(return_value=False))
+    mocker.patch(
+        "app.routes.servers.run_exchange_and_verify",
+        mocker.AsyncMock(
+            side_effect=ReregistrationError(
+                "AUTH_FAILED", "That password did not work.", retryable=False
+            )
+        ),
+    )
+
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "wrong"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "AUTH_FAILED"
+
+    # The write-ahead committed before the exchange survives for a resumed retry.
+    await db_session.refresh(server)
+    assert server.reregistration_state == "exchanging"
+    assert server.status == "key_mismatch"
+
+
+async def test_complete_requires_probe_first(
+    client, db_session, test_user, mock_ssh, mocker
+):
+    # In-progress but no pending host key captured yet.
+    server = await _seed_server(
+        db_session, test_user, reregistration_state="awaiting_confirmation"
+    )
+    server.pending_host_key = None
+    await db_session.commit()
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "p"}
+    )
+    assert resp.status_code == 400

@@ -156,12 +156,17 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _known_hosts_from(host: str, host_key: bytes) -> asyncssh.SSHKnownHosts:
+    """Build a strict known_hosts object pinning host to a single OpenSSH host key."""
+    host_key_line = f"{host} {host_key.decode('utf-8')}"
+    return asyncssh.import_known_hosts(host_key_line)
+
+
 def _known_hosts_for(server: Server) -> asyncssh.SSHKnownHosts:
     """Build a strict known_hosts object from the server's stored host key."""
     if not server.host_key:
         raise HostKeyMismatch("No verified host key on record for this server.")
-    host_key_line = f"{server.host} {server.host_key.decode('utf-8')}"
-    return asyncssh.import_known_hosts(host_key_line)
+    return _known_hosts_from(server.host, server.host_key)
 
 
 def _evict_if_stale(key: tuple[UUID, UUID]) -> None:
@@ -190,6 +195,27 @@ async def _run_checked(conn: asyncssh.SSHClientConnection, command: str):
             f"{(result.stderr or '').strip()}"
         )
     return result
+
+
+async def _append_authorized_key(
+    conn: asyncssh.SSHClientConnection, app_public_key: str
+) -> None:
+    """Append the app public key to ~/.ssh/authorized_keys idempotently.
+
+    Creates ~/.ssh (700) and the file (600) if absent and appends the key only when
+    the exact line is not already present, so retries never duplicate it and the
+    user's own keys are preserved. Shared by first-registration install_key and the
+    re-registration engine. Raises KeyInstallVerificationFailed on any command error.
+    """
+    quoted_pubkey = shlex.quote(app_public_key.strip())
+    await _run_checked(conn, "mkdir -p ~/.ssh && chmod 700 ~/.ssh")
+    append_cmd = (
+        "touch ~/.ssh/authorized_keys && "
+        f"grep -qF {quoted_pubkey} ~/.ssh/authorized_keys || "
+        f"echo {quoted_pubkey} >> ~/.ssh/authorized_keys"
+    )
+    await _run_checked(conn, append_cmd)
+    await _run_checked(conn, "chmod 600 ~/.ssh/authorized_keys")
 
 
 # Success / failure markers a login-shell chauthtok prints once the passwd conversation
@@ -318,17 +344,7 @@ class SSHService:
     ) -> None:
         """Append the app public key idempotently and, if requested, disable password
         auth. Shared by both password-session paths (normal and forced-change)."""
-        quoted_pubkey = shlex.quote(app_public_key.strip())
-
-        await _run_checked(conn, "mkdir -p ~/.ssh && chmod 700 ~/.ssh")
-        # Idempotent append: only add the key if it is not already present.
-        append_cmd = (
-            "touch ~/.ssh/authorized_keys && "
-            f"grep -qF {quoted_pubkey} ~/.ssh/authorized_keys || "
-            f"echo {quoted_pubkey} >> ~/.ssh/authorized_keys"
-        )
-        await _run_checked(conn, append_cmd)
-        await _run_checked(conn, "chmod 600 ~/.ssh/authorized_keys")
+        await _append_authorized_key(conn, app_public_key)
 
         if disable_password_auth:
             # Disable password auth idempotently and confirm the running daemon

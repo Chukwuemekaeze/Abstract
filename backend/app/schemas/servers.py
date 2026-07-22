@@ -32,19 +32,6 @@ class InstallKeyRequest(BaseModel):
 _LINUX_USERNAME = r"^[a-z_][a-z0-9_-]*$"
 
 
-class ReprobeRequest(BaseModel):
-    """Re-registration (host key changed / key_mismatch) probe request.
-
-    A rebuilt VPS is almost always root + password again, so username defaults to
-    root but stays editable for images whose default account differs. Same Linux
-    username rules as the sudo user, capped at 32 chars.
-    """
-
-    username: str = Field(
-        default="root", min_length=1, max_length=32, pattern=_LINUX_USERNAME
-    )
-
-
 class CreateSudoUserRequest(BaseModel):
     sudo_user_name: str = Field(min_length=1, max_length=32, pattern=_LINUX_USERNAME)
 
@@ -59,6 +46,21 @@ class ProbeResponse(BaseModel):
     app_public_key: str
 
 
+class ReregisterProbeResponse(BaseModel):
+    """Returned by POST /servers/{id}/reregister/probe. Only the fingerprint is
+    surfaced: the user compares it against their provider console. No key material."""
+
+    server_id: UUID
+    fingerprint_sha256: str
+
+
+class ReregisterCompleteRequest(BaseModel):
+    """Body for POST /servers/{id}/reregister/complete. The user only ever supplies a
+    password: the one they set when rebuilding, or the one the provider emailed."""
+
+    password: str = Field(min_length=1)
+
+
 class ServerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +70,9 @@ class ServerResponse(BaseModel):
     port: int
     username: str
     status: str
+    # Live re-registration progress ('none' when idle). The re-register modal polls
+    # this to surface friendly progress text while /reregister/complete runs.
+    reregistration_state: str
     active_operation: str | None
     fingerprint_sha256: str | None
     host_key_type: str | None

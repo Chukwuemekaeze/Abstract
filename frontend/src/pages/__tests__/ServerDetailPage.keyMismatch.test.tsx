@@ -23,8 +23,8 @@ vi.mock('@/components/Header', () => ({ Header: () => null }))
 
 import { apiClient } from '@/api/client'
 import { ServerDetailPage } from '@/pages/ServerDetailPage'
-import { useReRegisterServerDialogStore } from '@/store/reregister-server-dialog'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
+import { useReregisterDialogStore } from '@/store/reregisterDialogStore'
 import { makePendingServer } from '@/test/utils'
 
 const get = apiClient.get as unknown as Mock
@@ -49,8 +49,8 @@ function renderPage() {
 describe('ServerDetailPage — key_mismatch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useReRegisterServerDialogStore.getState().close()
     useDeleteServerDialogStore.getState().close()
+    useReregisterDialogStore.getState().close()
     get.mockResolvedValue({
       data: makePendingServer({ id: 'srv-1', name: 'web1', status: 'key_mismatch' }),
     })
@@ -84,7 +84,7 @@ describe('ServerDetailPage — key_mismatch', () => {
     await user.click(
       await screen.findByRole('button', { name: /re-register this server/i }),
     )
-    expect(useReRegisterServerDialogStore.getState().open).toBe(true)
-    expect(useReRegisterServerDialogStore.getState().serverId).toBe('srv-1')
+    expect(useReregisterDialogStore.getState().open).toBe(true)
+    expect(useReregisterDialogStore.getState().serverId).toBe('srv-1')
   })
 })
