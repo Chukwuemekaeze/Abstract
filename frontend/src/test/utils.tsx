@@ -33,6 +33,7 @@ export function makePendingServer(overrides: Partial<Server> = {}): Server {
     port: 22,
     username: 'root',
     status: 'pending_verification',
+    reregistration_state: 'none',
     active_operation: null,
     fingerprint_sha256: 'SHA256:abcdef0123456789abcdef0123456789',
     host_key_type: 'ssh-ed25519',
