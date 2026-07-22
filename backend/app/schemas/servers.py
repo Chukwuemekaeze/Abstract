@@ -46,6 +46,21 @@ class ProbeResponse(BaseModel):
     app_public_key: str
 
 
+class ReregisterProbeResponse(BaseModel):
+    """Returned by POST /servers/{id}/reregister/probe. Only the fingerprint is
+    surfaced: the user compares it against their provider console. No key material."""
+
+    server_id: UUID
+    fingerprint_sha256: str
+
+
+class ReregisterCompleteRequest(BaseModel):
+    """Body for POST /servers/{id}/reregister/complete. The user only ever supplies a
+    password: the one they set when rebuilding, or the one the provider emailed."""
+
+    password: str = Field(min_length=1)
+
+
 class ServerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
