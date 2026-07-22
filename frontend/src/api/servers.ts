@@ -73,12 +73,6 @@ export interface InstallKeyRequest {
   new_password?: string
 }
 
-// Body for POST /servers/{id}/reprobe (re-registration after a host key change).
-// A rebuilt VPS is usually root + password again, hence the default.
-export interface ReprobeRequest {
-  username: string
-}
-
 // Centralized query keys so queries and the mutations that invalidate them never
 // drift out of sync.
 export const serverKeys = {
@@ -143,31 +137,6 @@ export function useInstallKeyMutation() {
     onSuccess: (server) => {
       qc.invalidateQueries({ queryKey: serverKeys.all })
       qc.invalidateQueries({ queryKey: serverKeys.detail(server.id) })
-    },
-  })
-}
-
-// Re-registration step one, for a server whose host key changed (status
-// key_mismatch). Re-probes the current host, wipes the stale state a rebuild left
-// behind (old app key, hardening flags, project records), and moves the row back to
-// pending_verification, returning the new fingerprint + app key. Step two reuses
-// useInstallKeyMutation. Invalidates the list and this server's detail.
-export function useReprobeServerMutation() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (args: {
-      serverId: string
-      body: ReprobeRequest
-    }): Promise<ProbeResponse> => {
-      const { data } = await apiClient.post<ProbeResponse>(
-        `/servers/${args.serverId}/reprobe`,
-        args.body,
-      )
-      return data
-    },
-    onSuccess: (_data, args) => {
-      qc.invalidateQueries({ queryKey: serverKeys.all })
-      qc.invalidateQueries({ queryKey: serverKeys.detail(args.serverId) })
     },
   })
 }

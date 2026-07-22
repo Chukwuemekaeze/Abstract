@@ -32,7 +32,6 @@ import { useProjectsByServer } from '@/api/projects'
 import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
 import { DeleteServerDialog } from '@/components/servers/DeleteServerDialog'
-import { ReRegisterServerDialog } from '@/components/servers/ReRegisterServerDialog'
 import { ProjectCard } from '@/components/projects/ProjectCard'
 import {
   OperationCard,
@@ -48,7 +47,6 @@ import { useAddServerStore } from '@/store/addServerStore'
 import { useCancelRegistrationDialogStore } from '@/store/cancel-registration-dialog'
 import { useNewProjectStore } from '@/store/newProjectStore'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
-import { useReRegisterServerDialogStore } from '@/store/reregister-server-dialog'
 
 // Mirrors the backend Linux-username validation (schemas/servers.py).
 const USERNAME_PATTERN = /^[a-z_][a-z0-9_-]*$/
@@ -164,7 +162,6 @@ function PendingServerDetail({ server }: { server: Server }) {
 // re-register against the new fingerprint, or remove the stale record.
 function KeyMismatchServerDetail({ server }: { server: Server }) {
   const [showFullFingerprint, setShowFullFingerprint] = useState(false)
-  const openReRegister = useReRegisterServerDialogStore((s) => s.openWith)
   const openDeleteServer = useDeleteServerDialogStore((s) => s.openWith)
 
   const status = STATUS_META[server.status]
@@ -227,7 +224,8 @@ function KeyMismatchServerDetail({ server }: { server: Server }) {
       </Alert>
 
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => openReRegister(server.id)}>
+        {/* Re-registration is rewired to the new password-based flow in a follow-up. */}
+        <Button disabled title="Re-registration is temporarily unavailable">
           Re-register this server
         </Button>
         <Button variant="destructive" onClick={() => openDeleteServer(server.id)}>
@@ -235,7 +233,6 @@ function KeyMismatchServerDetail({ server }: { server: Server }) {
         </Button>
       </div>
 
-      <ReRegisterServerDialog />
       <DeleteServerDialog />
     </div>
   )
