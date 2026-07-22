@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { render } from '@testing-library/react'
@@ -23,6 +24,7 @@ vi.mock('@/components/Header', () => ({ Header: () => null }))
 import { apiClient } from '@/api/client'
 import { ServerDetailPage } from '@/pages/ServerDetailPage'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
+import { useReregisterDialogStore } from '@/store/reregisterDialogStore'
 import { makePendingServer } from '@/test/utils'
 
 const get = apiClient.get as unknown as Mock
@@ -48,6 +50,7 @@ describe('ServerDetailPage — key_mismatch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useDeleteServerDialogStore.getState().close()
+    useReregisterDialogStore.getState().close()
     get.mockResolvedValue({
       data: makePendingServer({ id: 'srv-1', name: 'web1', status: 'key_mismatch' }),
     })
@@ -72,5 +75,16 @@ describe('ServerDetailPage — key_mismatch', () => {
     // Operations are blocked: none of the hardening cards render for this state.
     expect(screen.queryByText('Operations')).not.toBeInTheDocument()
     expect(screen.queryByText('Update system')).not.toBeInTheDocument()
+  })
+
+  it('opens the re-register dialog from the action button', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole('button', { name: /re-register this server/i }),
+    )
+    expect(useReregisterDialogStore.getState().open).toBe(true)
+    expect(useReregisterDialogStore.getState().serverId).toBe('srv-1')
   })
 })
