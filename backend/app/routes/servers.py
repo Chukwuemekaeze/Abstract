@@ -26,7 +26,8 @@ from app.deps.services import (
     get_key_provider_dep,
     get_ssh_service,
 )
-from app.models import Project, Server, User
+from app.logging_config import logger
+from app.models import AppSshKey, Project, Server, User
 from app.redis_client import get_redis
 from app.schemas.servers import (
     CommandResultResponse,
@@ -34,6 +35,8 @@ from app.schemas.servers import (
     DeleteServerResponse,
     InstallKeyRequest,
     ProbeResponse,
+    ReregisterCompleteRequest,
+    ReregisterProbeResponse,
     ServerDeletionPreviewProject,
     ServerDeletionPreviewResponse,
     ServerResponse,
@@ -50,6 +53,19 @@ from app.services.server_deletion_service import (
     ServerOperationInFlight,
     cancel_registration,
     delete_server,
+)
+from app.services.server_reregistration_service import (
+    ReregistrationError,
+    evict_stale_ssh_state,
+    generate_bootstrap_password,
+    install_public_key,
+    recheck_pending_host_key,
+    regenerate_pending_keypair,
+    reset_projects_not_running,
+    run_exchange_and_verify,
+    smoke_test_pending_key,
+    try_resume_with_pending_key,
+    verify_password_for_resume,
 )
 from app.services.ssh_service import (
     HostKeyChangedDuringInstall,
@@ -192,6 +208,229 @@ async def install_key(
     server.password_auth_disabled = disable_password_auth_from_client
     await db.commit()
     await db.refresh(server)
+
+    return ServerResponse.model_validate(server)
+
+
+# Re-registration (host key changed / VPS rebuilt): a single password-only recovery.
+# Both endpoints are allowed while the server is key_mismatch or a re-registration is
+# already in flight (so a retried request resumes). HTTP status per error code, never a
+# generic 500.
+_REREGISTRATION_ERROR_STATUS = {
+    "HOST_KEY_CHANGED_AGAIN": 409,
+    "AUTH_FAILED": 400,
+    "PASSWORD_AUTH_UNAVAILABLE": 400,
+    "CHANGE_INCOMPLETE": 400,
+    "LOCKED_OUT": 400,
+    "NETWORK_UNREACHABLE": 503,
+}
+
+
+def _require_reregisterable(server: Server) -> None:
+    """A re-registration entry point is valid only for a server whose host key changed
+    or one already mid re-registration (to resume). Everything else is rejected so a
+    trusted server is never quietly re-keyed."""
+    in_progress = server.reregistration_state not in ("none", "done")
+    if server.status != "key_mismatch" and not in_progress:
+        raise HTTPException(
+            400,
+            "Re-registration is only available for a server whose host key has "
+            f"changed (status: {server.status}).",
+        )
+
+
+def _reregistration_http_error(exc: ReregistrationError) -> HTTPException:
+    return HTTPException(
+        _REREGISTRATION_ERROR_STATUS.get(exc.code, 400),
+        detail={
+            "code": exc.code,
+            "message": exc.message,
+            "retryable": exc.retryable,
+        },
+    )
+
+
+@router.post(
+    "/{server_id}/reregister/probe", response_model=ReregisterProbeResponse
+)
+async def reregister_probe(
+    server: Server = Depends(get_owned_server),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    ssh: SSHService = Depends(get_ssh_service),
+) -> ReregisterProbeResponse:
+    """Capture the rebuilt server's new host key (re-registration step one).
+
+    Opens an unauthenticated probe just long enough to record the presented host key as
+    a pending key, held apart from the still-trusted one until the flow finishes.
+    Returns the new fingerprint for the user to compare against their provider console.
+    Moves the row to awaiting_confirmation.
+    """
+    _require_reregisterable(server)
+    try:
+        probe_result = await ssh.probe(server.host, server.port, "root")
+    except ProbeError as exc:
+        raise _reregistration_http_error(
+            ReregistrationError(
+                "NETWORK_UNREACHABLE",
+                "Could not reach the server. Check that it is powered on and try "
+                "again.",
+                retryable=True,
+            )
+        ) from exc
+
+    server.pending_host_key = probe_result.host_key
+    server.pending_host_key_type = probe_result.host_key_type
+    server.pending_fingerprint_sha256 = probe_result.fingerprint_sha256
+    server.reregistration_state = "awaiting_confirmation"
+    await db.commit()
+    await db.refresh(server)
+
+    return ReregisterProbeResponse(
+        server_id=server.id,
+        fingerprint_sha256=probe_result.fingerprint_sha256,
+    )
+
+
+@router.post(
+    "/{server_id}/reregister/complete", response_model=ServerResponse
+)
+async def reregister_complete(
+    body: ReregisterCompleteRequest,
+    server: Server = Depends(get_owned_server),
+    current_user: User = Depends(get_current_user),
+    session_id: str = Depends(get_current_session_id),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+    ssh: SSHService = Depends(get_ssh_service),
+    key_provider: KeyProvider = Depends(get_key_provider_dep),
+) -> ServerResponse:
+    """Finish re-registration with the user's root password (step two).
+
+    Re-verifies the host key still matches the pending one, then runs the access engine:
+    a clean login, or an automatic provider-forced password change, transparently. On
+    success installs a fresh deploy key, promotes the new host key, and returns the
+    server verified-but-unhardened so the user re-runs Quick Harden. Every failure is a
+    structured error code; the row is left resumable. This route owns all commits, at
+    each persisted state transition.
+    """
+    _require_reregisterable(server)
+    if server.pending_host_key is None:
+        raise HTTPException(
+            400, "Confirm the new fingerprint before completing re-registration."
+        )
+
+    password_from_client = body.password
+
+    try:
+        # Cheap MITM-swap check: the identity must not have changed since probe.
+        await recheck_pending_host_key(server, ssh)
+
+        # Preflight, in order. Both resume paths make a retry idempotent.
+        working_password: str | None = None
+        resume_installed_key = False
+
+        app_key = await db.scalar(
+            select(AppSshKey).where(AppSshKey.server_id == server.id)
+        )
+        # (a) A pending keypair from a prior attempt already authenticates: the key is
+        # installed, so skip straight to the smoke test and promotion.
+        if app_key is not None and not app_key.is_active:
+            pending_private = await key_provider.decrypt(
+                app_key.encrypted_private_key
+            )
+            if await try_resume_with_pending_key(server, pending_private):
+                resume_installed_key = True
+
+        # (b) A bootstrap password from a prior attempt still works: that forced change
+        # took, so reuse it as the working password.
+        if not resume_installed_key and server.bootstrap_password is not None:
+            previous = (
+                await key_provider.decrypt(server.bootstrap_password)
+            ).decode("utf-8")
+            if await verify_password_for_resume(server, previous):
+                working_password = previous
+
+        if not resume_installed_key and working_password is None:
+            # Write-ahead: generate and persist the replacement password BEFORE the
+            # exchange, so a crash mid-change never loses the only working credential.
+            generated = generate_bootstrap_password()
+            server.reregistration_state = "exchanging"
+            server.bootstrap_password = await key_provider.encrypt(
+                generated.encode("utf-8")
+            )
+            await db.commit()
+
+            working_password = await run_exchange_and_verify(
+                server, password_from_client, generated
+            )
+            server.reregistration_state = "verifying"
+            await db.commit()
+
+        # Post-access. Fresh keypair unless we resumed onto an already-installed one.
+        server.reregistration_state = "installing_key"
+        await db.commit()
+
+        if resume_installed_key:
+            app_key = await get_key_for_server(server, db)
+        else:
+            app_key = await regenerate_pending_keypair(server, db, key_provider)
+            await install_public_key(
+                server, working_password, app_key.public_key
+            )
+
+        app_private = await key_provider.decrypt(app_key.encrypted_private_key)
+        if not await smoke_test_pending_key(server, app_private):
+            raise ReregistrationError(
+                "LOCKED_OUT",
+                "Abstract could not complete the login. Reset the root password from "
+                "your provider's control panel and try again.",
+            )
+
+        # Promote the pending host key and key now that key-based login is proven.
+        server.host_key = server.pending_host_key
+        server.host_key_type = server.pending_host_key_type
+        server.fingerprint_sha256 = server.pending_fingerprint_sha256
+        server.pending_host_key = None
+        server.pending_host_key_type = None
+        server.pending_fingerprint_sha256 = None
+        app_key.is_active = True
+        server.bootstrap_password = None
+
+        # Drop stale pooled connections and cached key material for this server.
+        await evict_stale_ssh_state(
+            server, current_user.id, session_id, redis, ssh
+        )
+
+        # Reset the facts a rebuild invalidated: verified but unhardened, root again.
+        server.status = "verified"
+        server.verified_at = datetime.now(timezone.utc)
+        server.username = "root"
+        server.sudo_user_name = None
+        server.key_installed = True
+        server.password_auth_disabled = False
+        server.root_login_disabled = False
+        server.firewall_enabled = False
+        server.docker_installed = False
+        server.base_packages_installed = False
+        server.nginx_installed = False
+        server.swap_configured = False
+        server.last_system_update_at = None
+        server.reregistration_state = "done"
+
+        # Their clones and containers no longer exist; the user redeploys.
+        await reset_projects_not_running(server, db)
+
+        await db.commit()
+        await db.refresh(server)
+    except ReregistrationError as exc:
+        # Discard the staged (uncommitted) post-access work; any write-ahead already
+        # committed stays so the next attempt resumes.
+        await db.rollback()
+        logger.info(
+            "Re-registration failed for server %s: %s", server.id, exc.code
+        )
+        raise _reregistration_http_error(exc) from exc
 
     return ServerResponse.model_validate(server)
 

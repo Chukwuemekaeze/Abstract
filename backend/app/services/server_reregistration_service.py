@@ -338,12 +338,15 @@ async def _open_access(
     known_hosts = _known_hosts_from(server.host, server.pending_host_key)
     client = _ForcedChangeClient(user_password, generated_password)
     try:
+        # No password= kwarg on purpose: when it is set asyncssh authenticates without
+        # calling password_auth_requested, which would leave password_offered False even
+        # when the server offered the method. Supplying the credential only through the
+        # client hooks keeps the offered/denied distinction reliable.
         conn = await asyncssh.connect(
             host=server.host,
             port=server.port,
             username=_ROOT,
             client_factory=lambda: client,
-            password=user_password,
             kbdint_auth=True,
             client_keys=None,
             known_hosts=known_hosts,
@@ -401,6 +404,13 @@ async def _verify_password(server: Server, password: str) -> bool:
             return (result.stdout or "").strip() == _ROOT
     except (OSError, asyncssh.Error):
         return False
+
+
+async def verify_password_for_resume(server: Server, password: str) -> bool:
+    """Preflight (b): a bootstrap password persisted by a prior attempt still logs in,
+    meaning that attempt's forced change took. True means skip straight to post-access
+    using it."""
+    return await _verify_password(server, password)
 
 
 async def recheck_pending_host_key(server: Server, ssh: SSHService) -> None:
