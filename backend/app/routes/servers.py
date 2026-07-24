@@ -59,9 +59,9 @@ from app.services.server_reregistration_service import (
     evict_stale_ssh_state,
     generate_bootstrap_password,
     install_public_key,
+    purge_server_projects,
     recheck_pending_host_key,
     regenerate_pending_keypair,
-    reset_projects_not_running,
     run_exchange_and_verify,
     smoke_test_pending_key,
     try_resume_with_pending_key,
@@ -304,6 +304,8 @@ async def reregister_complete(
     redis: aioredis.Redis = Depends(get_redis),
     ssh: SSHService = Depends(get_ssh_service),
     key_provider: KeyProvider = Depends(get_key_provider_dep),
+    clerk: Clerk = Depends(get_clerk_client),
+    github: GithubService = Depends(get_github_service),
 ) -> ServerResponse:
     """Finish re-registration with the user's root password (step two).
 
@@ -418,8 +420,10 @@ async def reregister_complete(
         server.last_system_update_at = None
         server.reregistration_state = "done"
 
-        # Their clones and containers no longer exist; the user redeploys.
-        await reset_projects_not_running(server, db)
+        # A rebuilt box is a blank slate: purge every project on it (rows + cascaded
+        # runs/env/deploy-key state) and revoke the now-orphaned GitHub deploy keys
+        # best-effort. The user re-creates projects from scratch, like a new server.
+        await purge_server_projects(server, db, clerk, github, current_user)
 
         await db.commit()
         await db.refresh(server)

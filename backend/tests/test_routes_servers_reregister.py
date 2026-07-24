@@ -11,7 +11,10 @@ import os
 import pytest
 from sqlalchemy import select
 
-from app.models import AppSshKey, Project, Server
+from app.clerk import get_clerk_client
+from app.deps.services import get_github_service
+from app.main import app
+from app.models import AppSshKey, Project, ProjectDeployKey, Server
 from app.services.key_provider import EnvKeyProvider
 from app.services.server_reregistration_service import ReregistrationError
 
@@ -38,6 +41,7 @@ async def _seed_server(
     bootstrap_password=None,
     key_is_active=True,
     with_projects=0,
+    with_deploy_keys=False,
     owner=None,
 ) -> Server:
     server = Server(
@@ -75,18 +79,28 @@ async def _seed_server(
     db_session.add(app_key)
 
     for i in range(with_projects):
-        db_session.add(
-            Project(
-                user_id=(owner or user).id,
-                server_id=server.id,
-                name=f"proj{i}",
-                slug=f"proj{i}",
-                github_repo_full_name=f"acme/proj{i}",
-                github_repo_id=1000 + i,
-                clone_path=f"/home/deploy/proj{i}",
-                runtime_status="running",
-            )
+        project = Project(
+            user_id=(owner or user).id,
+            server_id=server.id,
+            name=f"proj{i}",
+            slug=f"proj{i}",
+            github_repo_full_name=f"acme/proj{i}",
+            github_repo_id=1000 + i,
+            clone_path=f"/home/deploy/proj{i}",
+            runtime_status="running",
         )
+        db_session.add(project)
+        if with_deploy_keys:
+            await db_session.flush()  # populate project.id for the FK below
+            db_session.add(
+                ProjectDeployKey(
+                    project_id=project.id,
+                    github_deploy_key_id=5000 + i,
+                    deploy_key_public_key=f"ssh-ed25519 AAAADEPLOY{i}",
+                    encrypted_deploy_key_private_key=await provider.encrypt(b"DK"),
+                    deploy_key_fingerprint=f"SHA256:dk{i}",
+                )
+            )
     await db_session.commit()
     await db_session.refresh(server)
     return server
@@ -94,7 +108,7 @@ async def _seed_server(
 
 def _stub_engine(mocker, *, resume_pending=False, resume_bootstrap=False):
     """Stub the SSH-touching engine calls the route makes, leaving the DB-staging ones
-    (regenerate_pending_keypair, reset_projects_not_running) real."""
+    (regenerate_pending_keypair, purge_server_projects) real."""
     mocker.patch(
         "app.routes.servers.try_resume_with_pending_key",
         mocker.AsyncMock(return_value=resume_pending),
@@ -193,14 +207,13 @@ async def test_complete_promotes_and_resets_to_verified_unhardened(
     assert app_key.is_active is True
     assert app_key.public_key != "ssh-ed25519 AAAAOLDPUB abstract-server-old"
 
-    # Projects reset to not running, not deleted.
+    # A rebuilt box is a blank slate: the projects are purged, not preserved.
     projects = (
         await db_session.scalars(
             select(Project).where(Project.server_id == server.id)
         )
     ).all()
-    assert len(projects) == 2
-    assert all(p.runtime_status == "never_started" for p in projects)
+    assert len(projects) == 0
 
 
 # --- write-ahead -----------------------------------------------------------
@@ -336,3 +349,74 @@ async def test_complete_requires_probe_first(
         f"/api/servers/{server.id}/reregister/complete", json={"password": "p"}
     )
     assert resp.status_code == 400
+
+
+# --- project purge / deploy-key revocation ---------------------------------
+
+
+async def test_complete_revokes_github_deploy_keys_and_purges(
+    client, db_session, test_user, mock_ssh, mocker
+):
+    server = await _seed_server(
+        db_session,
+        test_user,
+        pending_host_key=PROBE_KEY,
+        with_projects=1,
+        with_deploy_keys=True,
+    )
+    _stub_engine(mocker)
+
+    github_mock = mocker.MagicMock()
+    github_mock.delete_deploy_key = mocker.AsyncMock()
+    app.dependency_overrides[get_github_service] = lambda: github_mock
+    app.dependency_overrides[get_clerk_client] = lambda: object()
+    mocker.patch(
+        "app.services.server_reregistration_service.get_github_oauth_token",
+        mocker.AsyncMock(return_value="tok"),
+    )
+
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
+    )
+    assert resp.status_code == 200, resp.text
+
+    # The orphaned GitHub deploy key was revoked, and all project state is gone.
+    github_mock.delete_deploy_key.assert_awaited_once_with("tok", "acme/proj0", 5000)
+    projects = (
+        await db_session.scalars(select(Project).where(Project.server_id == server.id))
+    ).all()
+    assert projects == []
+    keys = (await db_session.scalars(select(ProjectDeployKey))).all()
+    assert keys == []
+
+
+async def test_purge_is_best_effort_on_github_failure(
+    client, db_session, test_user, mock_ssh, mocker
+):
+    server = await _seed_server(
+        db_session,
+        test_user,
+        pending_host_key=PROBE_KEY,
+        with_projects=1,
+        with_deploy_keys=True,
+    )
+    _stub_engine(mocker)
+
+    app.dependency_overrides[get_github_service] = lambda: mocker.MagicMock()
+    app.dependency_overrides[get_clerk_client] = lambda: object()
+    # GitHub is unreachable: token fetch blows up. Recovery must still complete.
+    mocker.patch(
+        "app.services.server_reregistration_service.get_github_oauth_token",
+        mocker.AsyncMock(side_effect=Exception("clerk down")),
+    )
+
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
+    )
+    assert resp.status_code == 200, resp.text
+    await db_session.refresh(server)
+    assert server.reregistration_state == "done"
+    projects = (
+        await db_session.scalars(select(Project).where(Project.server_id == server.id))
+    ).all()
+    assert projects == []
