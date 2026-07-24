@@ -237,8 +237,9 @@ function ReregisterDialogOpen({ serverId }: { serverId: string }) {
             <Alert>
               <AlertTitle>Next steps</AlertTitle>
               <AlertDescription>
-                Run Quick Harden to re-secure the server, then redeploy your projects.
-                Their previous deployments no longer exist on the rebuilt machine.
+                Run Quick Harden to re-secure the server, then add your projects again.
+                The rebuild wiped the old projects and their deployments, so this server
+                starts fresh.
               </AlertDescription>
             </Alert>
             <div className="flex justify-end">

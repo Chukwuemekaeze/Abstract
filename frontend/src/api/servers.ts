@@ -264,8 +264,9 @@ export function useReregisterProbeMutation() {
 }
 
 // Re-registration step two: complete with the user's root password. The backend runs
-// the whole access engine and returns the server verified-but-unhardened. Invalidates
-// the list and detail so the page reflects the recovered state.
+// the whole access engine and returns the server verified-but-unhardened. It also
+// purges the server's projects (a rebuilt box is a blank slate), so we invalidate the
+// project queries too, alongside the server list and detail.
 export function useReregisterCompleteMutation() {
   const qc = useQueryClient()
   return useMutation({
@@ -282,6 +283,8 @@ export function useReregisterCompleteMutation() {
     onSuccess: (server) => {
       qc.invalidateQueries({ queryKey: serverKeys.all })
       qc.invalidateQueries({ queryKey: serverKeys.detail(server.id) })
+      qc.invalidateQueries({ queryKey: projectKeys.all })
+      qc.invalidateQueries({ queryKey: projectKeys.byServer(server.id) })
     },
   })
 }
