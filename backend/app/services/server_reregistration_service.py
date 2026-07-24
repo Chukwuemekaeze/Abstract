@@ -28,12 +28,15 @@ from uuid import UUID
 
 import asyncssh
 import redis.asyncio as aioredis
-from sqlalchemy import select, update
+from clerk_backend_api import Clerk
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging_config import logger
-from app.models import AppSshKey, Project, Server
+from app.models import AppSshKey, Project, ProjectDeployKey, Server, User
 from app.services.app_key_service import create_key_for_server
+from app.services.clerk_oauth import get_github_oauth_token
+from app.services.github_service import GithubService
 from app.services.key_provider import KeyProvider
 from app.services.ssh_service import (
     ProbeError,
@@ -530,11 +533,45 @@ async def evict_stale_ssh_state(
         await redis.delete(key)
 
 
-async def reset_projects_not_running(server: Server, db: AsyncSession) -> None:
-    """Post-access (6): the rebuild destroyed every clone and container. Reset runtime
-    status without deleting project rows; the user redeploys. Stages the write only."""
-    await db.execute(
-        update(Project)
-        .where(Project.server_id == server.id)
-        .values(runtime_status="never_started")
-    )
+async def purge_server_projects(
+    server: Server,
+    db: AsyncSession,
+    clerk: Clerk,
+    github: GithubService,
+    current_user: User,
+) -> None:
+    """Post-access (6): the rebuild destroyed every clone, container, and deploy key on
+    the box, so a re-registered server is a blank slate. Delete every project row on it
+    (DB ondelete=CASCADE clears runs, env files/vars, and deploy-key rows) so the user
+    re-creates projects from scratch, exactly like a newly added server.
+
+    GitHub deploy keys are revoked best-effort: the repos still exist, but a failure
+    there (GitHub down, no linked account) must never block recovery, so we only log it.
+    A subsequent revocation of an already-gone key is a 404, which delete_deploy_key
+    treats as success, keeping this idempotent on a resumed retry. Stages the deletes
+    only; the route owns the commit."""
+    projects = (
+        await db.scalars(select(Project).where(Project.server_id == server.id))
+    ).all()
+    for project in projects:
+        deploy_key_id = await db.scalar(
+            select(ProjectDeployKey.github_deploy_key_id).where(
+                ProjectDeployKey.project_id == project.id
+            )
+        )
+        if deploy_key_id is not None:
+            try:
+                token = await get_github_oauth_token(clerk, current_user.clerk_user_id)
+                # delete_deploy_key treats 404 (already gone) as success.
+                await github.delete_deploy_key(
+                    token, project.github_repo_full_name, deploy_key_id
+                )
+            except Exception as exc:  # best-effort: never block recovery on GitHub
+                logger.warning(
+                    "Re-registration: could not revoke GitHub deploy key for "
+                    "project %s (%s): %s",
+                    project.name,
+                    project.id,
+                    exc,
+                )
+        await db.delete(project)
