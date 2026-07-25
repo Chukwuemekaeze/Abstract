@@ -8,9 +8,6 @@ import userEvent from '@testing-library/user-event'
 vi.mock('@/api/client', () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   extractErrorMessage: (_err: unknown, fallback: string) => fallback,
-  // Mirror the real helper's shape check so the tests can drive the branch.
-  isPasswordChangeRequired: (err: { response?: { data?: { detail?: { code?: string } } } }) =>
-    err?.response?.data?.detail?.code === 'password_change_required',
 }))
 
 import { apiClient } from '@/api/client'
@@ -108,13 +105,8 @@ describe('AddServerDialog', () => {
     )
   })
 
-  it('reveals the new-password field when the VPS forces a password change', async () => {
+  it('installs in a single call without collecting a new password (forced changes are handled server-side)', async () => {
     const user = userEvent.setup()
-    // First install attempt: server forces a password change (expired password).
-    post.mockRejectedValueOnce({
-      response: { status: 409, data: { detail: { code: 'password_change_required' } } },
-    })
-    // Retry with the new password succeeds.
     post.mockResolvedValueOnce({ data: { id: 'srv-1', status: 'verified' } })
 
     renderWithProviders(<AddServerDialog />)
@@ -125,32 +117,16 @@ describe('AddServerDialog', () => {
       screen.getByRole('button', { name: /fingerprint matches, install key/i }),
     )
 
-    // The dialog stays on the confirmation step and reveals the new-password field.
-    const newPassword = await screen.findByLabelText('New root password')
-    // Install is gated until the new password is entered and confirmed.
-    const install = screen.getByRole('button', {
-      name: /fingerprint matches, install key/i,
-    })
-    expect(install).toBeDisabled()
-    await user.type(newPassword, 'a-fresh-strong-password')
-    expect(install).toBeDisabled()
-    await user.type(
-      screen.getByLabelText('Confirm new password'),
-      'a-fresh-strong-password',
-    )
-    expect(install).toBeEnabled()
-
-    await user.click(install)
-
-    // The retry carries the new password through to install_key.
+    // The dialog reaches the done step, and no new-password field is ever shown.
     await waitFor(() =>
-      expect(post).toHaveBeenLastCalledWith(
-        '/servers/srv-1/install_key',
-        expect.objectContaining({
-          password: 'expired-pw',
-          new_password: 'a-fresh-strong-password',
-        }),
-      ),
+      expect(useAddServerStore.getState().step).toBe('done'),
     )
+    expect(screen.queryByLabelText('New root password')).not.toBeInTheDocument()
+
+    // Exactly one install call, carrying only the password and hardening flag.
+    expect(post).toHaveBeenCalledTimes(1)
+    const [, body] = post.mock.calls[0]
+    expect(body).toEqual({ password: 'expired-pw', disable_password_auth: true })
+    expect(body).not.toHaveProperty('new_password')
   })
 })
