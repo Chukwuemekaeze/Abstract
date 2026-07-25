@@ -44,6 +44,10 @@ from app.services.project_deletion_service import (
     ProjectDeletionError,
     delete_project,
 )
+from app.services.server_reregistration_service import (
+    evict_stale_ssh_state,
+    purge_server_projects,
+)
 from app.services.sshd_config import SshdDirectiveResult, apply_sshd_directive
 from app.services.ssh_service import SSHService
 
@@ -52,6 +56,7 @@ __all__ = [
     "ServerOperationInFlight",
     "cancel_registration",
     "delete_server",
+    "purge_server_record",
 ]
 
 _TIMEOUT_CHECK = 30
@@ -599,6 +604,90 @@ async def cancel_registration(
             failed_step=exc.step,
             steps=steps,
             message=f"Cancellation failed at step '{exc.step}'.",
+        ) from exc
+
+    return steps
+
+
+async def purge_server_record(
+    *,
+    server: Server,
+    current_user: User,
+    session_id: str,
+    db: AsyncSession,
+    ssh: SSHService,
+    redis: aioredis.Redis,
+    clerk: Clerk,
+    github: GithubService,
+) -> list[ServerDeletionStepResult]:
+    """Records-only deletion for a rebuilt server (status key_mismatch).
+
+    The box was rebuilt: its host key no longer matches the one on record, and the old
+    OS — with Abstract's deploy key, its passwordless sudoers file, and its sshd edits —
+    was wiped with it. So there is nothing to clean up over SSH, and the host-key
+    mismatch means we could not connect even if there were. This deletes only Abstract's
+    own record of the server, keyed by server.id:
+
+      1. purge_projects: revoke each project's GitHub deploy key (best-effort) and stage
+         the project row deletes (cascade clears runs, env files/vars, deploy-key rows).
+         Deploy keys are revoked here because their github_deploy_key_id lives in
+         project_deploy_keys, which the cascade would otherwise drop before we could use
+         it.
+      2. delete_server_record: delete the server row and commit once, atomically with the
+         staged project deletes. The cascade removes the app_ssh_key row.
+      3. evict_ssh_state: drop the in-process pooled connection and every cached decrypted
+         key in Redis (ssh_key:{server.id}:*). Runs after the commit; it is external,
+         idempotent cleanup.
+
+    Unlike delete_server this takes no VPS locks and opens no SSH connection. On failure
+    it raises ServerDeletionError with the ordered step list, exactly like delete_server,
+    so the route returns a structured 502 and the frontend renders the same failure view.
+    """
+    server_id = server.id
+    steps: list[ServerDeletionStepResult] = []
+    try:
+        # -- 1. purge_projects -----------------------------------------------
+        await purge_server_projects(server, db, clerk, github, current_user)
+        steps.append(
+            ServerDeletionStepResult(name="purge_projects", status="completed")
+        )
+
+        # -- 2. delete_server_record (commit projects + server row atomically)
+        try:
+            row = await db.get(Server, server_id)
+            if row is not None:
+                await db.delete(row)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            raise _StepFailed(
+                "delete_server_record",
+                f"Could not delete the server record: {exc}",
+            ) from exc
+        steps.append(
+            ServerDeletionStepResult(name="delete_server_record", status="completed")
+        )
+
+        # -- 3. evict_ssh_state ----------------------------------------------
+        await evict_stale_ssh_state(server, current_user.id, session_id, redis, ssh)
+        steps.append(
+            ServerDeletionStepResult(name="evict_ssh_state", status="completed")
+        )
+    except _StepFailed as exc:
+        steps.append(
+            ServerDeletionStepResult(name=exc.step, status="failed", detail=exc.detail)
+        )
+        await db.rollback()
+        logger.warning(
+            "Server record purge aborted at step {} for server {}: {}",
+            exc.step,
+            server_id,
+            exc.detail,
+        )
+        raise ServerDeletionError(
+            failed_step=exc.step,
+            steps=steps,
+            message=f"Removing the server record failed at step '{exc.step}'.",
         ) from exc
 
     return steps
