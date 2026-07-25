@@ -422,3 +422,83 @@ async def test_delete_with_busy_project_returns_409_and_takes_no_locks(
     # The originally busy project is untouched.
     busy_row = await db_session.get(Project, pid["running"])
     assert busy_row.active_operation == "publishing"
+
+
+# -- records-only purge for a rebuilt (key_mismatch) server ------------------
+
+
+async def _key_mismatch_server(db_session, user):
+    """A rebuilt server: same identifiers, but its host key no longer matches, so it
+    is in key_mismatch status and blocks any SSH operation."""
+    server = await make_server(db_session, user.id)
+    server.status = "key_mismatch"
+    await db_session.commit()
+    return server
+
+
+async def test_records_only_purges_without_touching_the_box(
+    client, del_srv_env, db_session, test_user
+):
+    server = await _key_mismatch_server(db_session, test_user)
+    await _seed_app_key(db_session, server)
+    projects = await _mixed_projects(db_session, test_user, server)
+    server_id = server.id
+    pid = {k: p.id for k, p in projects.items()}
+
+    resp = await client.delete(f"/api/servers/{server_id}?records_only=true")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    steps = _steps_by_name(body)
+    assert steps["purge_projects"]["status"] == "completed"
+    assert steps["delete_server_record"]["status"] == "completed"
+    assert steps["evict_ssh_state"]["status"] == "completed"
+    # No SSH teardown steps run in a records-only purge.
+    assert "restore_ssh_access" not in steps
+    assert "remove_authorized_key" not in steps
+
+    # The box was never contacted, but the pooled connection was evicted.
+    del_srv_env.ssh.get_connection.assert_not_awaited()
+    del_srv_env.ssh.evict_connection.assert_called_once_with(test_user.id, server_id)
+
+    # The record and everything under it (projects, app key) are gone.
+    assert await db_session.get(Server, server_id) is None
+    for project_id in pid.values():
+        assert await db_session.get(Project, project_id) is None
+    assert (
+        await db_session.scalar(
+            select(AppSshKey).where(AppSshKey.server_id == server_id)
+        )
+        is None
+    )
+
+
+async def test_records_only_rejected_when_not_key_mismatch(
+    client, del_srv_env, db_session, test_user
+):
+    # A healthy server must go through the full SSH teardown; records-only would
+    # otherwise orphan Abstract's key and sudoers on a live box.
+    server = await make_server(db_session, test_user.id)  # status "verified"
+    await _seed_app_key(db_session, server)
+
+    resp = await client.delete(f"/api/servers/{server.id}?records_only=true")
+
+    assert resp.status_code == 409
+    assert "records_only" in resp.json()["detail"]
+    # The box was never contacted and the row survives.
+    del_srv_env.ssh.get_connection.assert_not_awaited()
+    del_srv_env.ssh.evict_connection.assert_not_called()
+    assert await db_session.get(Server, server.id) is not None
+
+
+async def test_records_only_while_operation_in_flight_returns_409(
+    client, del_srv_env, db_session, test_user
+):
+    server = await _key_mismatch_server(db_session, test_user)
+    server.active_operation = "deleting"
+    await db_session.commit()
+
+    resp = await client.delete(f"/api/servers/{server.id}?records_only=true")
+    assert resp.status_code == 409
+    assert await db_session.get(Server, server.id) is not None

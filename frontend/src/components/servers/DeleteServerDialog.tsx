@@ -48,6 +48,14 @@ const VPS_STEPS: { name: string; label: string }[] = [
   { name: 'delete_server_record', label: 'Deleting server record' },
 ]
 
+// The records-only purge steps for a rebuilt (key_mismatch) server, in run order.
+// No SSH teardown: the rebuilt box wiped Abstract's key, sudoers, and sshd edits.
+const PURGE_STEPS: { name: string; label: string }[] = [
+  { name: 'purge_projects', label: 'Deleting projects and revoking GitHub deploy keys' },
+  { name: 'delete_server_record', label: 'Deleting server record' },
+  { name: 'evict_ssh_state', label: 'Clearing cached SSH state' },
+]
+
 // Human labels for every backend step name, for the returned failure view.
 const STEP_LABELS: Record<string, string> = {
   delete_project: 'Delete project',
@@ -57,6 +65,8 @@ const STEP_LABELS: Record<string, string> = {
   remove_authorized_key: "Remove Abstract's SSH key",
   evict_ssh_connection: 'Close the pooled SSH connection',
   delete_server_record: 'Delete the server record',
+  purge_projects: 'Delete projects and revoke GitHub deploy keys',
+  evict_ssh_state: 'Clear cached SSH state',
 }
 
 // Same teardown order the backend loops in: running first, then failed, then
@@ -84,6 +94,7 @@ export function DeleteServerDialog() {
 
 function DeleteDialogOpen({ serverId }: { serverId: string }) {
   const close = useDeleteServerDialogStore((s) => s.close)
+  const recordsOnly = useDeleteServerDialogStore((s) => s.recordsOnly)
   const navigate = useNavigate()
   const { data: server } = useServer(serverId)
   const preview = useServerDeletionPreview(serverId, true)
@@ -104,8 +115,8 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
   const runDelete = async () => {
     setFailure(null)
     try {
-      await del.mutateAsync()
-      toast.success('Server deleted.')
+      await del.mutateAsync(recordsOnly ? { recordsOnly: true } : undefined)
+      toast.success(recordsOnly ? 'Server record removed.' : 'Server deleted.')
       close()
       // The server list lives at the app root.
       navigate('/')
@@ -118,17 +129,22 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
     <Dialog open onOpenChange={(v) => !pending && !v && close()}>
       <DialogContent showCloseButton={!pending} className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Delete server {server?.name ?? ''}?</DialogTitle>
+          <DialogTitle>
+            {recordsOnly
+              ? `Remove Abstract's record of ${server?.name ?? ''}?`
+              : `Delete server ${server?.name ?? ''}?`}
+          </DialogTitle>
           <DialogDescription>
-            This tears down every project on this server, then removes Abstract from
-            the VPS. This cannot be undone.
+            {recordsOnly
+              ? "This deletes Abstract's record of this rebuilt server and its projects. The server itself is not touched. This cannot be undone."
+              : 'This tears down every project on this server, then removes Abstract from the VPS. This cannot be undone.'}
           </DialogDescription>
         </DialogHeader>
 
         {failure ? (
           <FailureView failure={failure} />
         ) : pending ? (
-          <ProgressView projects={projects} />
+          <ProgressView projects={projects} recordsOnly={recordsOnly} />
         ) : (
           <>
             <ProjectPreview projects={projects} loading={preview.isLoading} />
@@ -137,26 +153,44 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
               <p className="mb-2 flex items-center gap-2 font-medium text-destructive">
                 <AlertTriangle className="size-4" /> Before you delete:
               </p>
-              <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
-                <li>
-                  All {projects.length} projects on this server will be deleted,
-                  including their containers, images, named volumes, clones, GitHub
-                  deploy keys, nginx configs, and TLS certificates.
-                </li>
-                <li>Abstract's SSH key will be removed from the server.</li>
-                <li>
-                  Password login and root SSH login will be re-enabled so you can log
-                  back in. You will need your root password from your VPS provider. If
-                  you have lost it, most providers let you reset it from their control
-                  panel.
-                </li>
-                <li>
-                  Docker, nginx, the firewall, the swap file, and the sudo user
-                  Abstract created will remain on the server. The sudo user's
-                  password-less sudo privilege will be revoked, but the account itself
-                  stays.
-                </li>
-              </ul>
+              {recordsOnly ? (
+                <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                  <li>
+                    All {projects.length} project records on this server will be
+                    deleted, and their GitHub deploy keys revoked.
+                  </li>
+                  <li>
+                    Nothing runs on the rebuilt server: its old OS — with Abstract's
+                    SSH key, sudoers grant, and sshd changes — was wiped, so there is
+                    nothing to undo over SSH.
+                  </li>
+                  <li>
+                    Only Abstract's own record is removed. If you want to keep using
+                    this server, re-register it instead.
+                  </li>
+                </ul>
+              ) : (
+                <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                  <li>
+                    All {projects.length} projects on this server will be deleted,
+                    including their containers, images, named volumes, clones, GitHub
+                    deploy keys, nginx configs, and TLS certificates.
+                  </li>
+                  <li>Abstract's SSH key will be removed from the server.</li>
+                  <li>
+                    Password login and root SSH login will be re-enabled so you can log
+                    back in. You will need your root password from your VPS provider. If
+                    you have lost it, most providers let you reset it from their control
+                    panel.
+                  </li>
+                  <li>
+                    Docker, nginx, the firewall, the swap file, and the sudo user
+                    Abstract created will remain on the server. The sudo user's
+                    password-less sudo privilege will be revoked, but the account itself
+                    stays.
+                  </li>
+                </ul>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -191,7 +225,11 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
             disabled={pending || (!failure && !confirmed)}
           >
             {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
-            {failure ? 'Retry deletion' : 'Delete server'}
+            {failure
+              ? 'Retry deletion'
+              : recordsOnly
+                ? 'Remove server record'
+                : 'Delete server'}
           </Button>
         </div>
       </DialogContent>
@@ -249,23 +287,35 @@ function ProjectPreview({
 // Optimistic progress while the delete runs. The backend returns the full step
 // list only at the end, so this is an ordered checklist of the work in flight
 // rather than a live cursor: each project in teardown order, then the VPS steps.
-function ProgressView({ projects }: { projects: ServerDeletionPreviewProject[] }) {
+function ProgressView({
+  projects,
+  recordsOnly,
+}: {
+  projects: ServerDeletionPreviewProject[]
+  recordsOnly: boolean
+}) {
+  // The records-only purge deletes all project rows in one step, so it shows the fixed
+  // purge checklist rather than a per-project line.
+  const steps = recordsOnly ? PURGE_STEPS : VPS_STEPS
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" />
-        Deleting server. This may take a while.
+        {recordsOnly
+          ? 'Removing server record.'
+          : 'Deleting server. This may take a while.'}
       </div>
       <ol className="flex flex-col gap-2">
-        {projects.map((p, i) => (
-          <li key={p.id} className="flex items-start gap-2 text-sm">
-            <MinusCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-            <span>
-              Deleting project {i + 1} of {projects.length}: {p.name}
-            </span>
-          </li>
-        ))}
-        {VPS_STEPS.map((step) => (
+        {!recordsOnly &&
+          projects.map((p, i) => (
+            <li key={p.id} className="flex items-start gap-2 text-sm">
+              <MinusCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <span>
+                Deleting project {i + 1} of {projects.length}: {p.name}
+              </span>
+            </li>
+          ))}
+        {steps.map((step) => (
           <li key={step.name} className="flex items-start gap-2 text-sm">
             <MinusCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <span>{step.label}</span>

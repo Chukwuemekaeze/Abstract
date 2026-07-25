@@ -12,7 +12,7 @@ from uuid import UUID  # noqa: F401  (server_id path param type is resolved by F
 
 import redis.asyncio as aioredis
 from clerk_backend_api import Clerk
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -53,6 +53,7 @@ from app.services.server_deletion_service import (
     ServerOperationInFlight,
     cancel_registration,
     delete_server,
+    purge_server_record,
 )
 from app.services.server_reregistration_service import (
     ReregistrationError,
@@ -607,6 +608,14 @@ async def deletion_preview(
 @router.delete("/{server_id}", response_model=DeleteServerResponse)
 async def delete_server_route(
     server: Server = Depends(get_owned_server),
+    records_only: bool = Query(
+        False,
+        description=(
+            "Records-only purge for a rebuilt server (key_mismatch): delete Abstract's "
+            "record without connecting over SSH. Rejected unless the server is in "
+            "key_mismatch status."
+        ),
+    ),
     current_user: User = Depends(get_current_user),
     session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
@@ -620,26 +629,55 @@ async def delete_server_route(
     (revoke sudoers, restore password + root SSH login, strip the app key from
     authorized_keys), then hard-delete the row.
 
-    409 if the server or any of its projects is already busy. 502 with the ordered
-    step list if any step fails; nothing is left half-deleted, so retrying picks up
-    cleanly once the underlying problem (for example VPS reachability) is fixed.
+    With records_only=true (only allowed for a rebuilt, key_mismatch server) this skips
+    all VPS steps entirely and just purges Abstract's record — projects, GitHub deploy
+    keys, cached SSH state, and the server row. The rebuilt box wiped Abstract's key,
+    sudoers, and sshd edits with the old OS, and the host-key mismatch blocks SSH anyway,
+    so there is nothing to undo on the box.
+
+    409 if the server or any of its projects is already busy, or if records_only is
+    requested for a server that is not in key_mismatch status. 502 with the ordered step
+    list if any step fails; nothing is left half-deleted, so retrying picks up cleanly
+    once the underlying problem (for example VPS reachability) is fixed.
     """
     if server.active_operation is not None:
         raise HTTPException(
             409, {"active_operation": server.active_operation}
         )
     try:
-        steps = await delete_server(
-            server=server,
-            current_user=current_user,
-            session_id=session_id,
-            db=db,
-            ssh=ssh,
-            redis=redis,
-            key_provider=key_provider,
-            clerk=clerk,
-            github=github,
-        )
+        if records_only:
+            if server.status != "key_mismatch":
+                raise HTTPException(
+                    409,
+                    {
+                        "records_only": (
+                            "Only a rebuilt server (key_mismatch) can be removed "
+                            "records-only."
+                        )
+                    },
+                )
+            steps = await purge_server_record(
+                server=server,
+                current_user=current_user,
+                session_id=session_id,
+                db=db,
+                ssh=ssh,
+                redis=redis,
+                clerk=clerk,
+                github=github,
+            )
+        else:
+            steps = await delete_server(
+                server=server,
+                current_user=current_user,
+                session_id=session_id,
+                db=db,
+                ssh=ssh,
+                redis=redis,
+                key_provider=key_provider,
+                clerk=clerk,
+                github=github,
+            )
     except ServerOperationInFlight as exc:
         raise HTTPException(409, exc.detail) from exc
     except ServerDeletionError as exc:

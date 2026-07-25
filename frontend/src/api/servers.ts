@@ -439,9 +439,14 @@ export function useServerDeletionPreview(
 export function useDeleteServerMutation(serverId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (): Promise<DeleteServerResponse> => {
+    // recordsOnly=true asks the backend to purge Abstract's record of a rebuilt
+    // (key_mismatch) server without any SSH teardown. Undefined runs the full delete.
+    mutationFn: async (
+      vars?: { recordsOnly?: boolean },
+    ): Promise<DeleteServerResponse> => {
+      const query = vars?.recordsOnly ? '?records_only=true' : ''
       const { data } = await apiClient.delete<DeleteServerResponse>(
-        `/servers/${serverId}`,
+        `/servers/${serverId}${query}`,
       )
       return data
     },
