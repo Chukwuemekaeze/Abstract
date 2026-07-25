@@ -158,6 +158,12 @@ class FakeRedis:
                 removed += 1
         return removed
 
+    async def scan_iter(self, match: str):
+        prefix = match.rstrip("*")
+        for key in list(self._store):
+            if key.startswith(prefix):
+                yield key
+
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession, test_user: User):
