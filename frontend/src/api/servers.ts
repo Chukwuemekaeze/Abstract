@@ -81,9 +81,6 @@ export interface ProbeRequest {
 export interface InstallKeyRequest {
   password: string
   disable_password_auth: boolean
-  // Sent only on a retry when the VPS forced a password change on first login (an
-  // expired password). Used once to complete the change; never stored.
-  new_password?: string
 }
 
 // Centralized query keys so queries and the mutations that invalidate them never
