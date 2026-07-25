@@ -3,11 +3,11 @@
 //   form  -> probe  -> awaiting_confirmation -> install_key -> done
 // Errors at either step move us to the failed step with a retry affordance.
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { extractErrorMessage, isPasswordChangeRequired } from '@/api/client'
+import { extractErrorMessage } from '@/api/client'
 import {
   useInstallKeyMutation,
   useProbeServerMutation,
@@ -42,40 +42,10 @@ export function AddServerDialog() {
   const probeMutation = useProbeServerMutation()
   const installMutation = useInstallKeyMutation()
 
-  // Set when the VPS forces a password change on first login (expired password). We
-  // stay on the confirmation step and reveal a "New password" field for the retry.
-  // Kept local so the new password is never persisted, like the password itself.
-  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false)
-  const [newPassword, setNewPassword] = useState('')
-  const [confirmNewPassword, setConfirmNewPassword] = useState('')
-
-  // Client-side validation for the new password (only matters once the VPS forces a
-  // change). The server is the real authority, but catching mismatches/weak passwords
-  // here avoids setting a root password the user cannot repeat.
-  const newPasswordError = !passwordChangeRequired
-    ? null
-    : newPassword.length > 0 && newPassword.length < 8
-      ? 'Use at least 8 characters.'
-      : newPassword.length > 0 && newPassword === formData.password
-        ? 'The new password must differ from the current one.'
-        : confirmNewPassword.length > 0 && confirmNewPassword !== newPassword
-          ? 'The passwords do not match.'
-          : null
-  const newPasswordValid =
-    !passwordChangeRequired ||
-    (newPassword.length >= 8 &&
-      newPassword !== formData.password &&
-      newPassword === confirmNewPassword)
-
   // The dialog is open for every step except idle.
   const isOpen = step !== 'idle'
 
-  // Reset the transient password-change state and close. Kept out of an effect so the
-  // reset is an explicit event, not a render side effect.
   const handleClose = () => {
-    setPasswordChangeRequired(false)
-    setNewPassword('')
-    setConfirmNewPassword('')
     close()
   }
 
@@ -92,9 +62,6 @@ export function AddServerDialog() {
   const handleProbe = async () => {
     setStep('probing')
     setError(null)
-    setPasswordChangeRequired(false)
-    setNewPassword('')
-    setConfirmNewPassword('')
     try {
       const result = await probeMutation.mutateAsync({
         name: formData.name,
@@ -114,7 +81,9 @@ export function AddServerDialog() {
     }
   }
 
-  // Step two: install the app key on the confirmed server.
+  // Step two: install the app key on the confirmed server. If the VPS forces an
+  // expired-password change on first login, the backend handles it transparently
+  // (auto-generating and setting a new root password), so this is always a single call.
   const handleInstall = async () => {
     if (!pendingServer) return
     setStep('installing')
@@ -125,19 +94,11 @@ export function AddServerDialog() {
         body: {
           password: formData.password,
           disable_password_auth: formData.disable_password_auth,
-          ...(passwordChangeRequired ? { new_password: newPassword } : {}),
         },
       })
       setStep('done')
       toast.success('Server verified and key installed.')
     } catch (err) {
-      if (isPasswordChangeRequired(err)) {
-        // The VPS demands a password change on first login. Reveal the new-password
-        // field and stay on the confirmation step so the user can retry in place.
-        setPasswordChangeRequired(true)
-        setStep('awaiting_confirmation')
-        return
-      }
       setError(extractErrorMessage(err, 'Key installation failed.'))
       setStep('failed')
     }
@@ -243,12 +204,10 @@ export function AddServerDialog() {
             fingerprint={pendingServer.fingerprint}
             onConfirm={handleInstall}
             onCancel={handleClose}
-            busy={!formData.password || !newPasswordValid}
+            busy={!formData.password}
           >
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">
-                {passwordChangeRequired ? 'Current (expired) password' : 'Password'}
-              </Label>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -259,38 +218,6 @@ export function AddServerDialog() {
                 required
               />
             </div>
-            {passwordChangeRequired && (
-              <div className="flex flex-col gap-2">
-                <div className="rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3 text-sm text-muted-foreground">
-                  This server requires a password change on first login (its password
-                  has expired). Enter a new root password to continue — Abstract sets it
-                  during login, then installs its key.
-                </div>
-                <Label htmlFor="new-password">New root password</Label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="A new password for the root account"
-                  autoComplete="off"
-                  required
-                />
-                <Label htmlFor="confirm-new-password">Confirm new password</Label>
-                <Input
-                  id="confirm-new-password"
-                  type="password"
-                  value={confirmNewPassword}
-                  onChange={(e) => setConfirmNewPassword(e.target.value)}
-                  placeholder="Retype the new password"
-                  autoComplete="off"
-                  required
-                />
-                {newPasswordError && (
-                  <p className="text-destructive text-xs">{newPasswordError}</p>
-                )}
-              </div>
-            )}
             <div className="flex items-center gap-2">
               <Checkbox
                 id="disable_password_auth"
@@ -306,7 +233,8 @@ export function AddServerDialog() {
           </FingerprintConfirm>
         )}
 
-        {/* Step: installing */}
+        {/* Step: installing. May take a moment if the server forces a password reset
+            on first login, which Abstract handles automatically. */}
         {step === 'installing' && (
           <div className="flex items-center gap-3 py-8">
             <Loader2 className="size-5 animate-spin" />

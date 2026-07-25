@@ -119,6 +119,15 @@ class FakeServer:
         self.pending_host_key = HOST_KEY_BYTES
 
 
+def _target(server=None) -> "srv.AccessTarget":
+    """Build an AccessTarget the way the reregister route does: root against the
+    pending host key."""
+    server = server or FakeServer()
+    return srv.AccessTarget(
+        server.host, server.port, "root", server.pending_host_key
+    )
+
+
 @pytest.fixture(autouse=True)
 def _patch_import_helpers(mocker):
     # These parse real key material; stub them since the fake conn ignores them.
@@ -195,7 +204,7 @@ async def test_branch_a_clean_login_returns_user_password(mocker):
         return FakeConnect(Conn(whoami="root"))
 
     mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
-    result = await srv._open_access(FakeServer(), "userpass", "genpass")
+    result = await srv._open_access(_target(), "userpass", "genpass")
     assert result.changed is False
     assert result.working_password == "userpass"
 
@@ -210,7 +219,7 @@ async def test_branch_b_kbdint_change_returns_generated(mocker):
         return FakeConnect(Conn(whoami="root"))
 
     mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
-    result = await srv._open_access(FakeServer(), "userpass", "genpass")
+    result = await srv._open_access(_target(), "userpass", "genpass")
     assert result.changed is True
     assert result.working_password == "genpass"
 
@@ -235,7 +244,7 @@ async def test_branch_b_pty_change_returns_generated(mocker):
         return FakeConnect(conn)
 
     mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
-    result = await srv._open_access(FakeServer(), "expired", "genpass")
+    result = await srv._open_access(_target(), "expired", "genpass")
     assert result.changed is True
     assert result.working_password == "genpass"
     assert process.stdin.writes == ["expired\n", "genpass\n", "genpass\n"]
@@ -248,7 +257,7 @@ async def test_branch_c_password_auth_unavailable(mocker):
 
     mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
     with pytest.raises(srv.ReregistrationError) as exc:
-        await srv._open_access(FakeServer(), "userpass", "genpass")
+        await srv._open_access(_target(), "userpass", "genpass")
     assert exc.value.code == "PASSWORD_AUTH_UNAVAILABLE"
 
 
@@ -260,7 +269,7 @@ async def test_auth_failed_when_password_offered_but_rejected(mocker):
 
     mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
     with pytest.raises(srv.ReregistrationError) as exc:
-        await srv._open_access(FakeServer(), "wrongpass", "genpass")
+        await srv._open_access(_target(), "wrongpass", "genpass")
     assert exc.value.code == "AUTH_FAILED"
 
 
@@ -272,7 +281,7 @@ async def test_disconnect_after_change_is_probable_success(mocker):
         raise srv.asyncssh.ConnectionLost("closed after change")
 
     mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
-    result = await srv._open_access(FakeServer(), "userpass", "genpass")
+    result = await srv._open_access(_target(), "userpass", "genpass")
     assert result.changed is True
     assert result.working_password == "genpass"
 
@@ -291,7 +300,7 @@ async def test_run_exchange_retries_when_change_did_not_take(mocker):
     verify = mocker.patch.object(
         srv, "_verify_password", mocker.AsyncMock(side_effect=[False, True, True])
     )
-    result = await srv.run_exchange_and_verify(FakeServer(), "userpass", "genpass")
+    result = await srv.run_exchange_and_verify(_target(), "userpass", "genpass")
     assert result == "genpass"
     assert verify.await_count == 3
 
@@ -306,7 +315,7 @@ async def test_run_exchange_locked_out_when_neither_password_works(mocker):
         srv, "_verify_password", mocker.AsyncMock(return_value=False)
     )
     with pytest.raises(srv.ReregistrationError) as exc:
-        await srv.run_exchange_and_verify(FakeServer(), "userpass", "genpass")
+        await srv.run_exchange_and_verify(_target(), "userpass", "genpass")
     assert exc.value.code == "LOCKED_OUT"
 
 
@@ -319,7 +328,7 @@ async def test_run_exchange_branch_a_verifies_user_password(mocker):
     mocker.patch.object(
         srv, "_verify_password", mocker.AsyncMock(return_value=True)
     )
-    result = await srv.run_exchange_and_verify(FakeServer(), "userpass", "genpass")
+    result = await srv.run_exchange_and_verify(_target(), "userpass", "genpass")
     assert result == "userpass"
 
 
@@ -357,14 +366,14 @@ async def test_try_resume_with_pending_key_true_on_whoami_root(mocker):
     mocker.patch.object(
         srv.asyncssh, "connect", side_effect=lambda **k: FakeConnect(Conn(whoami="root"))
     )
-    assert await srv.try_resume_with_pending_key(FakeServer(), b"PRIV") is True
+    assert await srv.try_resume_with_pending_key(_target(), b"PRIV") is True
 
 
 async def test_verify_password_false_on_connection_error(mocker):
     mocker.patch.object(
         srv.asyncssh, "connect", side_effect=OSError("refused")
     )
-    assert await srv.verify_password_for_resume(FakeServer(), "pw") is False
+    assert await srv.verify_password_for_resume(_target(), "pw") is False
 
 
 # --- post-access helpers ---------------------------------------------------
@@ -375,7 +384,7 @@ async def test_install_public_key_appends_idempotently(mocker):
     mocker.patch.object(
         srv.asyncssh, "connect", side_effect=lambda **k: FakeConnect(conn)
     )
-    await srv.install_public_key(FakeServer(), "genpass", "ssh-ed25519 AAAAKEY comment")
+    await srv.install_public_key(_target(), "genpass", "ssh-ed25519 AAAAKEY comment")
     joined = "\n".join(conn.commands)
     assert "mkdir -p ~/.ssh" in joined
     assert "authorized_keys" in joined

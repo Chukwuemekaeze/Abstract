@@ -230,6 +230,23 @@ class _ForcedChangeClient(asyncssh.SSHClient):
         return responses
 
 
+@dataclass(frozen=True)
+class AccessTarget:
+    """Where and how the access engine authenticates: host/port, the login username,
+    and the host key to pin known_hosts against.
+
+    Decouples the engine from the ``Server`` row so both flows can reuse it. Re-registration
+    builds this from ``server.pending_host_key`` and the fixed ``root`` login (a rebuilt box
+    only has root). First-time registration builds it from the freshly probed, already
+    trusted ``server.host_key`` and the arbitrary ``server.username``.
+    """
+
+    host: str
+    port: int
+    username: str
+    host_key: bytes
+
+
 @dataclass
 class AccessResult:
     # The password that ended up working: the user's on a clean login, the generated
@@ -329,7 +346,7 @@ async def _drive_pty_change(
 
 
 async def _open_access(
-    server: Server, user_password: str, generated_password: str
+    target: AccessTarget, user_password: str, generated_password: str
 ) -> AccessResult:
     """Open a password session, handling a forced change on either surface.
 
@@ -338,7 +355,7 @@ async def _open_access(
     returns the generated password. Raises the mapped error for an unavailable method,
     a rejected password, or an unreachable host.
     """
-    known_hosts = _known_hosts_from(server.host, server.pending_host_key)
+    known_hosts = _known_hosts_from(target.host, target.host_key)
     client = _ForcedChangeClient(user_password, generated_password)
     try:
         # No password= kwarg on purpose: when it is set asyncssh authenticates without
@@ -346,9 +363,9 @@ async def _open_access(
         # when the server offered the method. Supplying the credential only through the
         # client hooks keeps the offered/denied distinction reliable.
         conn = await asyncssh.connect(
-            host=server.host,
-            port=server.port,
-            username=_ROOT,
+            host=target.host,
+            port=target.port,
+            username=target.username,
             client_factory=lambda: client,
             kbdint_auth=True,
             client_keys=None,
@@ -390,30 +407,30 @@ async def _open_access(
         return AccessResult(user_password, changed=False)
 
 
-async def _verify_password(server: Server, password: str) -> bool:
-    """Open a fresh password connection pinned to the pending host key and confirm a
-    command runs as root. Verification is the only definition of success."""
-    known_hosts = _known_hosts_from(server.host, server.pending_host_key)
+async def _verify_password(target: AccessTarget, password: str) -> bool:
+    """Open a fresh password connection pinned to the target host key and confirm a
+    command runs as the target user. Verification is the only definition of success."""
+    known_hosts = _known_hosts_from(target.host, target.host_key)
     try:
         async with asyncssh.connect(
-            host=server.host,
-            port=server.port,
-            username=_ROOT,
+            host=target.host,
+            port=target.port,
+            username=target.username,
             password=password,
             client_keys=None,
             known_hosts=known_hosts,
         ) as conn:
             result = await conn.run("whoami", check=False)
-            return (result.stdout or "").strip() == _ROOT
+            return (result.stdout or "").strip() == target.username
     except (OSError, asyncssh.Error):
         return False
 
 
-async def verify_password_for_resume(server: Server, password: str) -> bool:
+async def verify_password_for_resume(target: AccessTarget, password: str) -> bool:
     """Preflight (b): a bootstrap password persisted by a prior attempt still logs in,
     meaning that attempt's forced change took. True means skip straight to post-access
     using it."""
-    return await _verify_password(server, password)
+    return await _verify_password(target, password)
 
 
 async def recheck_pending_host_key(server: Server, ssh: SSHService) -> None:
@@ -428,26 +445,28 @@ async def recheck_pending_host_key(server: Server, ssh: SSHService) -> None:
         raise _host_key_changed_again()
 
 
-async def try_resume_with_pending_key(server: Server, app_private_key: bytes) -> bool:
+async def try_resume_with_pending_key(
+    target: AccessTarget, app_private_key: bytes
+) -> bool:
     """Preflight (a): a pending keypair from a prior attempt authenticates cleanly, so
     the earlier attempt got far enough to install it. True means skip to post-access."""
-    known_hosts = _known_hosts_from(server.host, server.pending_host_key)
+    known_hosts = _known_hosts_from(target.host, target.host_key)
     try:
         async with asyncssh.connect(
-            host=server.host,
-            port=server.port,
-            username=_ROOT,
+            host=target.host,
+            port=target.port,
+            username=target.username,
             client_keys=[asyncssh.import_private_key(app_private_key)],
             known_hosts=known_hosts,
         ) as conn:
             result = await conn.run("whoami", check=False)
-            return (result.stdout or "").strip() == _ROOT
+            return (result.stdout or "").strip() == target.username
     except (OSError, asyncssh.Error):
         return False
 
 
 async def run_exchange_and_verify(
-    server: Server, user_password: str, generated_password: str
+    target: AccessTarget, user_password: str, generated_password: str
 ) -> str:
     """Access engine steps 1 and 2. Open access, then verify (the only success signal).
     Up to 3 total attempts with a fresh connection each, bounded by the overall
@@ -456,19 +475,19 @@ async def run_exchange_and_verify(
     async def _attempt_loop() -> str:
         last_error: ReregistrationError | None = None
         for _attempt in range(_MAX_EXCHANGE_ATTEMPTS):
-            result = await _open_access(server, user_password, generated_password)
+            result = await _open_access(target, user_password, generated_password)
             if not result.changed:
                 # Branch A: the user password must still authenticate a fresh session.
-                if await _verify_password(server, user_password):
+                if await _verify_password(target, user_password):
                     return user_password
                 last_error = _locked_out()
                 continue
             # Branch B: the generated password is the new credential.
-            if await _verify_password(server, generated_password):
+            if await _verify_password(target, generated_password):
                 return generated_password
             # It did not take. If the old password still works, retry the exchange;
             # if neither works, the account is locked out.
-            if await _verify_password(server, user_password):
+            if await _verify_password(target, user_password):
                 last_error = _change_incomplete()
                 continue
             raise _locked_out()
@@ -497,17 +516,17 @@ async def regenerate_pending_keypair(
 
 
 async def install_public_key(
-    server: Server, working_password: str, app_public_key: str
+    target: AccessTarget, working_password: str, app_public_key: str
 ) -> None:
     """Post-access (2): install the new public key over the password connection,
     idempotently. Retryable on a transient failure since it changes nothing on a
     second run."""
-    known_hosts = _known_hosts_from(server.host, server.pending_host_key)
+    known_hosts = _known_hosts_from(target.host, target.host_key)
     try:
         async with asyncssh.connect(
-            host=server.host,
-            port=server.port,
-            username=_ROOT,
+            host=target.host,
+            port=target.port,
+            username=target.username,
             password=working_password,
             client_keys=None,
             known_hosts=known_hosts,
@@ -517,10 +536,10 @@ async def install_public_key(
         raise _network_unreachable() from exc
 
 
-async def smoke_test_pending_key(server: Server, app_private_key: bytes) -> bool:
+async def smoke_test_pending_key(target: AccessTarget, app_private_key: bytes) -> bool:
     """Post-access (3): open a key-only connection with strict checking against the
-    pending host key and confirm whoami. The single gate before promotion."""
-    return await try_resume_with_pending_key(server, app_private_key)
+    target host key and confirm whoami. The single gate before promotion."""
+    return await try_resume_with_pending_key(target, app_private_key)
 
 
 async def evict_stale_ssh_state(

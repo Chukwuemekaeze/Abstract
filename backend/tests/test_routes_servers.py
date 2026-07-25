@@ -1,18 +1,38 @@
 """End to end route tests using httpx ASGITransport, a test DB, and a mocked SSH service."""
 
+import os
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 
 from app.models import Server
-from app.services.ssh_service import (
-    KeyInstallVerificationFailed,
-    PasswordChangeRequired,
-)
+from app.services.key_provider import EnvKeyProvider
+from app.services.server_reregistration_service import ReregistrationError
+from app.services.ssh_service import KeyInstallVerificationFailed
 from tests.conftest import requires_db
 
 pytestmark = requires_db
+
+
+@pytest.fixture(autouse=True)
+def register_engine(mocker):
+    """Patch the re-registration access-engine functions the install_key route reuses.
+
+    Default models a clean first-time login: no resumable bootstrap password, and the
+    exchange returns the user-supplied password unchanged (Branch A). Tests reconfigure
+    the returned mocks to model a provider-forced change, a resume, or an error.
+    """
+    verify_resume = mocker.patch(
+        "app.routes.servers.verify_password_for_resume",
+        mocker.AsyncMock(return_value=False),
+    )
+    exchange = mocker.patch(
+        "app.routes.servers.run_exchange_and_verify",
+        mocker.AsyncMock(side_effect=lambda target, user_pw, generated: user_pw),
+    )
+    return SimpleNamespace(verify_resume=verify_resume, exchange=exchange)
 
 
 async def test_probe_install_smoke_flow(client, mock_ssh, db_session, test_user):
@@ -133,56 +153,163 @@ async def test_install_key_records_key_installed_on_partial_failure(
     assert row.key_installed is True
 
 
-async def test_install_key_reports_password_change_required(
-    client, mock_ssh, db_session, test_user
+async def test_install_key_clean_login_verifies_and_clears_bootstrap(
+    client, mock_ssh, db_session, test_user, register_engine
 ):
-    # A freshly rebuilt DO droplet forces a password change on first login. install_key
-    # surfaces that as PasswordChangeRequired; the route returns a structured 409 the
-    # frontend recognizes, and the key never landed so key_installed stays False.
+    # A healthy box with a good password: the exchange returns the user's password
+    # (Branch A), the key installs, and no bootstrap password lingers.
     probe = (
         await client.post(
             "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
         )
     ).json()
-    mock_ssh.install_key.side_effect = PasswordChangeRequired(
-        "This server requires a password change on first login."
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={"password": "hunter2", "disable_password_auth": True},
     )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "verified"
+
+    # The exchange ran with the user's password and returned it unchanged.
+    register_engine.exchange.assert_awaited_once()
+    _target, user_pw, _generated = register_engine.exchange.await_args.args
+    assert user_pw == "hunter2"
+
+    # install_key received the working password, and no new_password kwarg exists anymore.
+    _args, kwargs = mock_ssh.install_key.call_args
+    assert kwargs["password_from_client"] == "hunter2"
+    assert "new_password" not in kwargs
+
+    row = await db_session.scalar(
+        select(Server).where(Server.id == probe["server_id"])
+    )
+    assert row.key_installed is True
+    assert row.bootstrap_password is None  # write-ahead cleared on success
+
+
+async def test_install_key_forced_change_writes_ahead_then_clears(
+    client, mock_ssh, db_session, test_user, register_engine
+):
+    # A rebuilt box registered from scratch forces an expired-password change: the
+    # exchange returns a fresh auto-generated password, which must be persisted
+    # write-ahead BEFORE the key install runs, then cleared once verified.
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+
+    register_engine.exchange.side_effect = None
+    register_engine.exchange.return_value = "generated-boot-pw"
+
+    seen = {}
+
+    async def _capture(**kwargs):
+        # The live server row handed to install_key already carries the write-ahead
+        # bootstrap password (committed before this call), and the working password is
+        # the generated one, not the user's.
+        seen["bootstrap_at_install"] = kwargs["server"].bootstrap_password
+        seen["password"] = kwargs["password_from_client"]
+        return None
+
+    mock_ssh.install_key.side_effect = _capture
 
     resp = await client.post(
         f"/api/servers/{probe['server_id']}/install_key",
-        json={"password": "expired", "disable_password_auth": True},
+        json={"password": "expired-provider-pw", "disable_password_auth": True},
     )
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["detail"]["code"] == "password_change_required"
+    assert resp.status_code == 200, resp.text
+    assert seen["bootstrap_at_install"] is not None  # write-ahead landed before install
+    assert seen["password"] == "generated-boot-pw"
+
+    row = await db_session.scalar(
+        select(Server).where(Server.id == probe["server_id"])
+    )
+    assert row.status == "verified"
+    assert row.bootstrap_password is None  # cleared on success
+
+
+async def test_install_key_resumes_via_bootstrap_password(
+    client, mock_ssh, db_session, test_user, register_engine
+):
+    # A prior attempt already changed the password and persisted it. On retry that
+    # bootstrap password still logs in, so the exchange is skipped entirely.
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+    provider = EnvKeyProvider(os.environ["APP_MASTER_KEY"])
+    row = await db_session.scalar(
+        select(Server).where(Server.id == probe["server_id"])
+    )
+    row.bootstrap_password = await provider.encrypt(b"resumed-pw")
+    await db_session.commit()
+
+    register_engine.verify_resume.return_value = True
+
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={"password": "expired-provider-pw", "disable_password_auth": True},
+    )
+    assert resp.status_code == 200, resp.text
+    register_engine.exchange.assert_not_awaited()  # resumed, no new exchange
+    _args, kwargs = mock_ssh.install_key.call_args
+    assert kwargs["password_from_client"] == "resumed-pw"
+
+
+@pytest.mark.parametrize(
+    "code,expected_status",
+    [("AUTH_FAILED", 400), ("NETWORK_UNREACHABLE", 503), ("LOCKED_OUT", 400)],
+)
+async def test_install_key_maps_forced_change_error_and_retains_bootstrap(
+    client, mock_ssh, db_session, test_user, register_engine, code, expected_status
+):
+    # A forced-change failure maps to a register-scoped HTTP error, and the write-ahead
+    # bootstrap password is kept so a retry can resume.
+    probe = (
+        await client.post(
+            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+        )
+    ).json()
+    register_engine.exchange.side_effect = ReregistrationError(code, "boom")
+
+    resp = await client.post(
+        f"/api/servers/{probe['server_id']}/install_key",
+        json={"password": "expired-provider-pw", "disable_password_auth": True},
+    )
+    assert resp.status_code == expected_status, resp.text
+    assert resp.json()["detail"]["code"] == code
+    mock_ssh.install_key.assert_not_awaited()
 
     row = await db_session.scalar(
         select(Server).where(Server.id == probe["server_id"])
     )
     assert row.status == "pending_verification"
-    assert row.key_installed is False
+    assert row.bootstrap_password is not None  # retained for resume
 
 
-async def test_install_key_forwards_new_password(client, mock_ssh, db_session, test_user):
-    # On the retry the user supplies a new password; the route forwards it to the
-    # service (which changes it over keyboard-interactive) and the server verifies.
+async def test_install_key_forced_change_non_root_user(
+    client, mock_ssh, db_session, test_user, register_engine
+):
+    # The access engine was root-only before parameterization; a forced change for a
+    # non-root login must target that username.
     probe = (
         await client.post(
-            "/api/servers/probe", json={"name": "web", "host": "203.0.113.10"}
+            "/api/servers/probe",
+            json={"name": "web", "host": "203.0.113.10", "username": "deploy"},
         )
     ).json()
+    register_engine.exchange.side_effect = None
+    register_engine.exchange.return_value = "generated-boot-pw"
 
     resp = await client.post(
         f"/api/servers/{probe['server_id']}/install_key",
-        json={
-            "password": "expired",
-            "disable_password_auth": True,
-            "new_password": "a-fresh-strong-password",
-        },
+        json={"password": "expired-provider-pw", "disable_password_auth": False},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "verified"
-    _args, kwargs = mock_ssh.install_key.call_args
-    assert kwargs["new_password"] == "a-fresh-strong-password"
+    target, _user_pw, _generated = register_engine.exchange.await_args.args
+    assert target.username == "deploy"
 
 
 async def test_list_returns_only_current_user_servers(client, mock_ssh, db_session, test_user):

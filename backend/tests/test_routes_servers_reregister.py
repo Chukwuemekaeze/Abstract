@@ -226,11 +226,13 @@ async def test_bootstrap_password_written_before_exchange(
 
     captured = {}
 
-    async def fake_exchange(srv_arg, user_password, generated):
+    async def fake_exchange(target, user_password, generated):
         # By the time the exchange runs the write-ahead must be committed: the row
         # already carries an encrypted bootstrap password and the exchanging state.
-        captured["state"] = srv_arg.reregistration_state
-        captured["bootstrap_set"] = srv_arg.bootstrap_password is not None
+        # The engine now takes an AccessTarget, so read the live server row (the route
+        # mutates the same instance via the shared session) rather than the argument.
+        captured["state"] = server.reregistration_state
+        captured["bootstrap_set"] = server.bootstrap_password is not None
         return generated
 
     mocker.patch("app.routes.servers.try_resume_with_pending_key", mocker.AsyncMock(return_value=False))

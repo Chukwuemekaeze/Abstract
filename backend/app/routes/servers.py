@@ -56,6 +56,7 @@ from app.services.server_deletion_service import (
     purge_server_record,
 )
 from app.services.server_reregistration_service import (
+    AccessTarget,
     ReregistrationError,
     evict_stale_ssh_state,
     generate_bootstrap_password,
@@ -72,7 +73,6 @@ from app.services.ssh_service import (
     HostKeyChangedDuringInstall,
     HostKeyMismatch,
     KeyInstallVerificationFailed,
-    PasswordChangeRequired,
     ProbeError,
     SSHService,
     SshHardeningFailed,
@@ -138,6 +138,53 @@ async def probe_server(
     )
 
 
+# A brand-new server can also arrive with the provider's root password pre-expired (a
+# freshly rebuilt box registered from scratch after its record was deleted). Registration
+# resolves that transparently through the same access engine re-registration uses, so the
+# error codes are identical, but the engine's copy is written for a *rebuild*. These
+# messages keep the status codes but speak to a first-time registration, where the user
+# set this password themselves and the remedy is not "reset it in your provider's panel".
+_FORCED_CHANGE_MESSAGES = {
+    "AUTH_FAILED": (
+        "That password did not work. Double-check the root password for this server "
+        "and try again."
+    ),
+    "PASSWORD_AUTH_UNAVAILABLE": (
+        "This server does not accept password logins, so Abstract cannot install its "
+        "key. Enable password authentication for root (or reset the root password) and "
+        "try again."
+    ),
+    "CHANGE_INCOMPLETE": (
+        "This server required a password reset on first login and it could not be "
+        "completed automatically. Set a new root password on the server and try again."
+    ),
+    "LOCKED_OUT": (
+        "Abstract could not complete the login to install its key. Reset the root "
+        "password on the server and try again."
+    ),
+    "NETWORK_UNREACHABLE": (
+        "Could not reach the server. Check that it is powered on and reachable, then "
+        "try again."
+    ),
+}
+
+
+def _forced_change_http_error(exc: ReregistrationError) -> HTTPException:
+    """Map a forced-change access-engine failure to a register-scoped HTTP error.
+
+    Shares the re-registration status codes (see _REREGISTRATION_ERROR_STATUS) but
+    substitutes registration-appropriate copy.
+    """
+    return HTTPException(
+        _REREGISTRATION_ERROR_STATUS.get(exc.code, 400),
+        detail={
+            "code": exc.code,
+            "message": _FORCED_CHANGE_MESSAGES.get(exc.code, exc.message),
+            "retryable": exc.retryable,
+        },
+    )
+
+
 @router.post("/{server_id}/install_key", response_model=ServerResponse)
 async def install_key(
     body: InstallKeyRequest,
@@ -149,16 +196,18 @@ async def install_key(
 ) -> ServerResponse:
     """Install the app public key on the server and verify it (TOFU step two).
 
-    Only valid while the server is pending_verification. Re-probes to confirm the
-    host key has not changed, then uses the supplied password over a strict host key
-    checked session to install the app public key (idempotently) and optionally
-    disable password authentication. Finally proves key based login works with a
-    whoami smoke test. On success the server moves to status verified. The password
-    is used transiently and never stored.
+    Only valid while the server is pending_verification. First obtains a working root
+    password: normally the one the user supplied, but if the server forces an expired
+    password change on first login (e.g. a freshly rebuilt box), the re-registration
+    access engine drives that change to a fresh auto-generated password, written ahead
+    (bootstrap_password) so a crash mid-change never loses the only credential. Then
+    installs the app public key (idempotently) over a strict host-key-checked session,
+    optionally disables password authentication, and proves key-based login with a whoami
+    smoke test. On success the server moves to verified and the bootstrap password is
+    cleared. No password is stored beyond the transient write-ahead.
     """
     password_from_client = body.password
     disable_password_auth_from_client = body.disable_password_auth
-    new_password_from_client = body.new_password
 
     if server.status != "pending_verification":
         raise HTTPException(
@@ -173,30 +222,60 @@ async def install_key(
 
     app_private_key = await key_provider.decrypt(app_key.encrypted_private_key)
 
+    # Access engine target: the freshly probed (already trusted) host key and the login
+    # the user registered with. Unlike re-registration this is server.host_key, and the
+    # username is not necessarily root.
+    target = AccessTarget(
+        server.host, server.port, server.username, server.host_key
+    )
+
     try:
+        # Resume preflight: a bootstrap password persisted by a prior attempt still logs
+        # in, so its forced change already took. Reuse it and skip the exchange.
+        working_password: str | None = None
+        if server.bootstrap_password is not None:
+            previous = (
+                await key_provider.decrypt(server.bootstrap_password)
+            ).decode("utf-8")
+            if await verify_password_for_resume(target, previous):
+                working_password = previous
+
+        if working_password is None:
+            # Write-ahead: generate and persist the replacement password BEFORE the
+            # exchange, so a forced change that lands mid-crash never orphans the box.
+            # run_exchange_and_verify returns the user's password on a clean login, or the
+            # generated one after a forced change.
+            generated = generate_bootstrap_password()
+            server.bootstrap_password = await key_provider.encrypt(
+                generated.encode("utf-8")
+            )
+            await db.commit()
+
+            working_password = await run_exchange_and_verify(
+                target, password_from_client, generated
+            )
+
         await ssh.install_key(
             server=server,
-            password_from_client=password_from_client,
+            password_from_client=working_password,
             app_public_key=app_key.public_key,
             app_private_key=app_private_key,
             disable_password_auth=disable_password_auth_from_client,
-            new_password=new_password_from_client,
         )
-    except PasswordChangeRequired as exc:
-        # The server forces a password change on first login (expired password) and no
-        # new password was supplied. The key never landed, so key_installed stays False;
-        # the frontend reads this code, collects a new password, and retries.
-        raise HTTPException(
-            409,
-            detail={"code": "password_change_required", "message": str(exc)},
-        ) from exc
+    except ReregistrationError as exc:
+        # The forced-change exchange failed before the key was appended. Leave
+        # bootstrap_password persisted (do NOT clear it) so a retry resumes via the
+        # preflight above.
+        await db.rollback()
+        raise _forced_change_http_error(exc) from exc
     except HostKeyChangedDuringInstall as exc:
         # Aborted before the key was appended; nothing to clean up on cancel.
         raise HTTPException(409, str(exc)) from exc
     except (KeyInstallVerificationFailed, SshHardeningFailed) as exc:
         # These only fire after the key was appended to authorized_keys (disable
         # password auth / key-login verification). Record that the key landed so a
-        # later cancel strips it off the VPS, then surface the failure.
+        # later cancel strips it off the VPS, then surface the failure. Keep
+        # bootstrap_password so a retry can resume with the working password.
         server.key_installed = True
         await db.commit()
         raise HTTPException(502, str(exc)) from exc
@@ -207,6 +286,7 @@ async def install_key(
     server.verified_at = datetime.now(timezone.utc)
     server.key_installed = True
     server.password_auth_disabled = disable_password_auth_from_client
+    server.bootstrap_password = None
     await db.commit()
     await db.refresh(server)
 
@@ -329,6 +409,10 @@ async def reregister_complete(
         # Cheap MITM-swap check: the identity must not have changed since probe.
         await recheck_pending_host_key(server, ssh)
 
+        # A rebuilt box always authenticates as root against the freshly probed
+        # (pending) host key until the new key-based login is proven and promoted.
+        target = AccessTarget(server.host, server.port, "root", server.pending_host_key)
+
         # Preflight, in order. Both resume paths make a retry idempotent.
         working_password: str | None = None
         resume_installed_key = False
@@ -342,7 +426,7 @@ async def reregister_complete(
             pending_private = await key_provider.decrypt(
                 app_key.encrypted_private_key
             )
-            if await try_resume_with_pending_key(server, pending_private):
+            if await try_resume_with_pending_key(target, pending_private):
                 resume_installed_key = True
 
         # (b) A bootstrap password from a prior attempt still works: that forced change
@@ -351,7 +435,7 @@ async def reregister_complete(
             previous = (
                 await key_provider.decrypt(server.bootstrap_password)
             ).decode("utf-8")
-            if await verify_password_for_resume(server, previous):
+            if await verify_password_for_resume(target, previous):
                 working_password = previous
 
         if not resume_installed_key and working_password is None:
@@ -365,7 +449,7 @@ async def reregister_complete(
             await db.commit()
 
             working_password = await run_exchange_and_verify(
-                server, password_from_client, generated
+                target, password_from_client, generated
             )
             server.reregistration_state = "verifying"
             await db.commit()
@@ -379,11 +463,11 @@ async def reregister_complete(
         else:
             app_key = await regenerate_pending_keypair(server, db, key_provider)
             await install_public_key(
-                server, working_password, app_key.public_key
+                target, working_password, app_key.public_key
             )
 
         app_private = await key_provider.decrypt(app_key.encrypted_private_key)
-        if not await smoke_test_pending_key(server, app_private):
+        if not await smoke_test_pending_key(target, app_private):
             raise ReregistrationError(
                 "LOCKED_OUT",
                 "Abstract could not complete the login. Reset the root password from "
