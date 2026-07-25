@@ -21,10 +21,6 @@ class CreateServerRequest(BaseModel):
 class InstallKeyRequest(BaseModel):
     password: str = Field(min_length=1)
     disable_password_auth: bool = True
-    # Supplied only on a retry when the server forced a password change on first login
-    # (an expired password). Used once, over keyboard-interactive, to complete the
-    # change during authentication; never stored.
-    new_password: str | None = Field(default=None, min_length=1)
 
 
 # A valid lowercase Linux username: starts with a letter or underscore, then
