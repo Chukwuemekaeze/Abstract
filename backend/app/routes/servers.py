@@ -56,6 +56,7 @@ from app.services.server_deletion_service import (
     purge_server_record,
 )
 from app.services.server_reregistration_service import (
+    AccessTarget,
     ReregistrationError,
     evict_stale_ssh_state,
     generate_bootstrap_password,
@@ -329,6 +330,10 @@ async def reregister_complete(
         # Cheap MITM-swap check: the identity must not have changed since probe.
         await recheck_pending_host_key(server, ssh)
 
+        # A rebuilt box always authenticates as root against the freshly probed
+        # (pending) host key until the new key-based login is proven and promoted.
+        target = AccessTarget(server.host, server.port, "root", server.pending_host_key)
+
         # Preflight, in order. Both resume paths make a retry idempotent.
         working_password: str | None = None
         resume_installed_key = False
@@ -342,7 +347,7 @@ async def reregister_complete(
             pending_private = await key_provider.decrypt(
                 app_key.encrypted_private_key
             )
-            if await try_resume_with_pending_key(server, pending_private):
+            if await try_resume_with_pending_key(target, pending_private):
                 resume_installed_key = True
 
         # (b) A bootstrap password from a prior attempt still works: that forced change
@@ -351,7 +356,7 @@ async def reregister_complete(
             previous = (
                 await key_provider.decrypt(server.bootstrap_password)
             ).decode("utf-8")
-            if await verify_password_for_resume(server, previous):
+            if await verify_password_for_resume(target, previous):
                 working_password = previous
 
         if not resume_installed_key and working_password is None:
@@ -365,7 +370,7 @@ async def reregister_complete(
             await db.commit()
 
             working_password = await run_exchange_and_verify(
-                server, password_from_client, generated
+                target, password_from_client, generated
             )
             server.reregistration_state = "verifying"
             await db.commit()
@@ -379,11 +384,11 @@ async def reregister_complete(
         else:
             app_key = await regenerate_pending_keypair(server, db, key_provider)
             await install_public_key(
-                server, working_password, app_key.public_key
+                target, working_password, app_key.public_key
             )
 
         app_private = await key_provider.decrypt(app_key.encrypted_private_key)
-        if not await smoke_test_pending_key(server, app_private):
+        if not await smoke_test_pending_key(target, app_private):
             raise ReregistrationError(
                 "LOCKED_OUT",
                 "Abstract could not complete the login. Reset the root password from "
