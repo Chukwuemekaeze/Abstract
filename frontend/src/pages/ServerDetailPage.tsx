@@ -230,7 +230,10 @@ function KeyMismatchServerDetail({ server }: { server: Server }) {
         <Button onClick={() => openReRegister(server.id)}>
           Re-register this server
         </Button>
-        <Button variant="destructive" onClick={() => openDeleteServer(server.id)}>
+        <Button
+          variant="destructive"
+          onClick={() => openDeleteServer(server.id, { recordsOnly: true })}
+        >
           Remove server record
         </Button>
       </div>

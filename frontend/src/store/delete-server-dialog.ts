@@ -8,7 +8,10 @@ import { create } from 'zustand'
 interface DeleteServerDialogState {
   open: boolean
   serverId: string | null
-  openWith: (serverId: string) => void
+  // Records-only purge for a rebuilt (key_mismatch) server: delete Abstract's record
+  // without any SSH teardown. Set by the "Remove server record" button.
+  recordsOnly: boolean
+  openWith: (serverId: string, opts?: { recordsOnly?: boolean }) => void
   close: () => void
 }
 
@@ -16,7 +19,9 @@ export const useDeleteServerDialogStore = create<DeleteServerDialogState>(
   (set) => ({
     open: false,
     serverId: null,
-    openWith: (serverId) => set({ open: true, serverId }),
-    close: () => set({ open: false, serverId: null }),
+    recordsOnly: false,
+    openWith: (serverId, opts) =>
+      set({ open: true, serverId, recordsOnly: opts?.recordsOnly ?? false }),
+    close: () => set({ open: false, serverId: null, recordsOnly: false }),
   }),
 )
