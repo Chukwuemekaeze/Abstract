@@ -138,7 +138,10 @@ port 8000, so there is no CORS configuration to worry about during development.
 5. Compare that fingerprint against the one in your VPS provider's console. If they
    match, click "Fingerprint matches, install key".
 6. Abstract installs its public key over the password session, optionally disables
-   password authentication, and verifies key based login works.
+   password authentication, and verifies key based login works. If the server forces a
+   password change on first login (some providers ship a pre-expired root password),
+   Abstract completes that change automatically, generating and setting a fresh root
+   password itself — you are never asked to supply a new one.
 7. On the verified server card, click "Run smoke test". You should see the output of
    `echo 'hello from Abstract' && uname -a && date`, proving the pooled
    key based SSH connection works end to end.
@@ -344,6 +347,20 @@ blindly trust it: the UI asks you to compare the fingerprint against your provid
 console before anything is installed. Once confirmed, every later connection uses
 strict host key checking against the stored key, and a mismatch flips the server to
 the `key_mismatch` status rather than connecting.
+
+### Re-registration (recovering a rebuilt server)
+
+Rebuilding a VPS gives it a new host key, so the next connection trips the
+`key_mismatch` guard above. From the server's detail page you can re-register it:
+Abstract re-probes for the new fingerprint (held separately from the still-trusted one
+until the flow completes), you confirm it against your provider console, and it
+re-establishes key based access using only your root password. The same password-only
+access engine drives first-time registration and re-registration, so a provider-forced
+expired-password change is handled automatically in both, and the replacement password
+is written ahead before the change so a crash mid-recovery never locks you out. Only
+once fresh key based login is proven does Abstract promote the new host key. A rebuilt
+box comes back as a blank slate (unhardened, root again), so its projects are cleared
+and re-created from scratch, exactly like a newly added server.
 
 ### KeyProvider abstraction
 
