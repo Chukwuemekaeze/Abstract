@@ -23,7 +23,14 @@ The frontend gates every page behind Clerk: unauthenticated visitors are redirec
 to `/sign-in`. The backend verifies the Clerk session token on every request. The
 first time a user signs in, Abstract lazily creates a matching row in the Postgres
 `users` table (keyed by the Clerk user id, with the email pulled from Clerk). There
-is no separate backend signup flow; Clerk owns the entire account lifecycle.
+is no separate backend signup flow; Clerk owns sign up and sign in.
+
+Account **deletion**, however, is backend-driven. Clerk's self-serve "delete
+account" is disabled in the Clerk dashboard, because deleting the Clerk user
+directly would orphan the Postgres row and, since `email` is unique, collide on the
+next sign up. Instead the app deletes against its own backend, which tears down
+every server the proper way, purges the `users` row, and only then deletes the
+Clerk user. See [Deleting your account](#deleting-your-account).
 
 ## Architecture at a glance
 
@@ -336,6 +343,32 @@ fails the whole deletion aborts with no orphan records anywhere: the row stays,
 the flag is cleared so you can retry, and the API returns a 502 whose body names
 the failed step and the full per-step progress. On success the row is
 hard-deleted; there is no soft-delete.
+
+## Deleting your account
+
+`DELETE /api/account` removes a user and everything they own, in the order that
+keeps Postgres and Clerk in sync and never orphans Abstract's key on a live box:
+
+1. **Tear down every server**, oldest first, through the same server-deletion path a
+   single delete uses: each project is removed, Abstract is stripped off the VPS
+   (its SSH key, sudoers grant, and sshd changes undone, password and root login
+   restored), and the server row is hard-deleted.
+2. **Delete the `users` row** once every server is gone.
+3. **Delete the Clerk user last.** If Clerk fails at this point the local data is
+   already purged, so the email-collision that motivated this flow is resolved; the
+   response is a 502 and the lingering Clerk user can be cleaned up manually.
+
+It is a strict abort: if any server can't be cleanly torn down — it is busy, or its
+VPS is unreachable — the whole deletion stops and the API returns a 409 naming the
+blocking server. Nothing beyond the servers already torn down is touched, and the
+account and Clerk user are left intact so you can resolve that server and retry.
+There is no force path: the app never leaves its key on a server it still has a
+record of.
+
+In the UI the action lives as a **Delete account** item in the account (avatar)
+menu, guarded by a type-to-confirm dialog. On success the app clears its cache and
+signs you out; on a 409 it shows which server to resolve first and keeps you signed
+in.
 
 ## Architecture notes
 
