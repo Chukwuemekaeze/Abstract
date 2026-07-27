@@ -379,7 +379,9 @@ key the server presents, and stores it along with its SHA256 fingerprint. It doe
 blindly trust it: the UI asks you to compare the fingerprint against your provider's
 console before anything is installed. Once confirmed, every later connection uses
 strict host key checking against the stored key, and a mismatch flips the server to
-the `key_mismatch` status rather than connecting.
+the `key_mismatch` status rather than connecting. Whenever an action you trigger (a
+smoke test or a hardening step) trips this guard, the server's badge and detail page
+switch to `key_mismatch` immediately, without a page refresh.
 
 ### Re-registration (recovering a rebuilt server)
 
