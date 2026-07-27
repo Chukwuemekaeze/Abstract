@@ -33,16 +33,23 @@ async function armAndClick() {
 
 function blockingServerError() {
   const err = new AxiosError('Request failed', 'ERR_BAD_REQUEST')
-  // The structured 409 the backend returns when a server can't be torn down.
+  // The structured 409 the backend returns when a server can't be reached: the raw
+  // message names the internal 'connect_ssh' step, which we must not surface.
   err.response = {
     status: 409,
     data: {
       detail: {
         message:
-          "Server 'web1' could not be torn down. Resolve or delete that server, then delete your account again.",
+          "Server 'web1' could not be torn down (Deletion failed at step 'connect_ssh'.). Resolve or delete that server, then delete your account again.",
         blocking_server_id: 'srv-1',
         blocking_server_name: 'web1',
-        steps: [],
+        steps: [
+          {
+            name: 'connect_ssh',
+            status: 'failed',
+            detail: 'Could not connect to the server: [Errno 110] Connection timed out',
+          },
+        ],
       },
     },
   } as never
@@ -74,15 +81,18 @@ describe('DeleteAccountDialog', () => {
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
   })
 
-  it('surfaces the blocking server and keeps the user signed in on a 409', async () => {
+  it('surfaces a clean unreachable message and keeps the user signed in on a 409', async () => {
     del.mockRejectedValueOnce(blockingServerError())
     renderWithProviders(<DeleteAccountDialog />)
 
     await armAndClick()
 
-    expect(
-      await screen.findByText(/Server 'web1' could not be torn down/),
-    ).toBeInTheDocument()
+    // The clean message names the server and the fix, without the internal step name.
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/Server 'web1' couldn't be reached/)
+    expect(alert).toHaveTextContent(/powered on and online/)
+    expect(alert).not.toHaveTextContent(/connect_ssh/)
+    expect(alert).not.toHaveTextContent(/step/)
     // The user is not signed out and the dialog stays open for a retry.
     expect(signOut).not.toHaveBeenCalled()
     expect(useDeleteAccountDialogStore.getState().open).toBe(true)
