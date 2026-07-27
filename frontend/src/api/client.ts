@@ -33,7 +33,9 @@ apiClient.interceptors.response.use(
 export function extractErrorMessage(error: unknown, fallback = 'Something went wrong'): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail
-    if (typeof detail === 'string') return detail
+    // Guard against a blank detail (e.g. an empty exception string server-side)
+    // producing an empty toast; fall through to the axios message or the fallback.
+    if (typeof detail === 'string' && detail.trim()) return detail
     if (error.message) return error.message
   }
   if (error instanceof Error) return error.message
