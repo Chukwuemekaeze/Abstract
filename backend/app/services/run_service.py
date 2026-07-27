@@ -597,7 +597,14 @@ async def get_detected_ports(
             if not isinstance(publisher, dict):
                 continue
             url = publisher.get("URL") or ""
-            if url not in ("", "0.0.0.0", "::") and not url.startswith("0.0.0.0"):
+            # Accept both public (0.0.0.0/::) and loopback (127.0.0.1/::1)
+            # bindings: the nginx reverse proxy runs on the host and reaches the
+            # app via proxy_pass http://127.0.0.1:<port>, so loopback-published
+            # ports are reachable — and, behind the UFW rules, the safer choice.
+            if url and not (
+                url in ("0.0.0.0", "::", "127.0.0.1", "::1")
+                or url.startswith(("0.0.0.0", "127.0.0.1"))
+            ):
                 continue
             host_port = publisher.get("PublishedPort") or 0
             container_port = publisher.get("TargetPort") or 0

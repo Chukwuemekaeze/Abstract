@@ -323,7 +323,7 @@ async def test_detected_ports_parses_and_flags(mocker):
             "web",
             publishers=[
                 publisher(8080, 8000),
-                publisher(9999, 9999, url="127.0.0.1"),  # not host-published
+                publisher(9999, 9999, url="127.0.0.1"),  # loopback: reachable
             ],
         ),
         service_entry("db", publishers=[publisher(5432, 5432)]),
@@ -339,6 +339,32 @@ async def test_detected_ports_parses_and_flags(mocker):
     assert [(p.service, p.host_port, p.container_port, p.is_dangerous) for p in ports] == [
         ("db", 5432, 5432, True),
         ("web", 8080, 8000, False),
+        ("web", 9999, 9999, False),
+    ]
+
+
+async def test_detected_ports_accepts_public_and_loopback_bindings(mocker):
+    # nginx proxies via 127.0.0.1, so both the universal "3000:80" (0.0.0.0)
+    # and the security-conscious "127.0.0.1:3000:80" bindings must be detected.
+    # A private-LAN binding nginx cannot reach is excluded.
+    services = [
+        service_entry("public", publishers=[publisher(3000, 80, url="0.0.0.0")]),
+        service_entry("loopback", publishers=[publisher(4000, 80, url="127.0.0.1")]),
+        service_entry("v6loop", publishers=[publisher(5000, 80, url="::1")]),
+        service_entry("lan", publishers=[publisher(6000, 80, url="10.0.0.5")]),
+    ]
+    conn = make_conn(
+        mocker,
+        {
+            f"{CLONE_PATH}/compose.yaml": result("yes\n"),
+            "ps -a --format json": result(ps_ndjson(services)),
+        },
+    )
+    ports = await get_detected_ports(conn=conn, project=fake_project())
+    assert [(p.service, p.host_port) for p in ports] == [
+        ("loopback", 4000),
+        ("public", 3000),
+        ("v6loop", 5000),
     ]
 
 
