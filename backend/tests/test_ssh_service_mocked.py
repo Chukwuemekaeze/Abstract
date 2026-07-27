@@ -102,6 +102,23 @@ async def test_probe_returns_fingerprint_format(mocker):
     assert result.host_key_type == "ssh-ed25519"
 
 
+async def test_probe_args_bind_to_real_get_server_host_key_signature(mocker):
+    """Guard against passing a kwarg the real get_server_host_key rejects (e.g.
+    connect_timeout). The mock accepts anything, so we bind the probe's actual call
+    args against the real signature to prove they are valid."""
+    import inspect
+
+    real_signature = inspect.signature(ssh_mod.asyncssh.get_server_host_key)
+    host_key_mock = mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    await SSHService().probe("203.0.113.10", 22, "root")
+    # Raises TypeError if the probe passes anything the real function won't accept.
+    real_signature.bind(
+        *host_key_mock.call_args.args, **host_key_mock.call_args.kwargs
+    )
+
+
 async def test_probe_unreachable_raises_probe_error(mocker):
     mocker.patch.object(
         ssh_mod.asyncssh,
@@ -130,9 +147,12 @@ async def test_connection_establishment_carries_uniform_timeouts(mocker):
     mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
     mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
 
-    # probe: connect_timeout only (no auth phase).
+    # probe: get_server_host_key does not accept the timeout kwargs directly, so
+    # they ride along on an options object (which it applies to bound connect+kex).
     await SSHService().probe("203.0.113.10", 22, "root")
-    assert host_key_mock.call_args.kwargs["connect_timeout"] == opts["connect_timeout"]
+    probe_opts = host_key_mock.call_args.kwargs["options"]
+    assert probe_opts.connect_timeout == opts["connect_timeout"]
+    assert probe_opts.login_timeout == opts["login_timeout"]
 
     # a full connect: both connect_timeout and login_timeout.
     await SSHService().install_key(
