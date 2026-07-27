@@ -149,12 +149,19 @@ class SSHService:
         returns the server host key without attempting authentication, which is
         exactly the TOFU probe we want. TimeoutError is a subclass of OSError so
         the two except clauses below cover unreachable and timeout cases.
+
+        Unlike asyncssh.connect, get_server_host_key does not accept the timeout
+        kwargs directly; they must be carried via an SSHClientConnectionOptions
+        object, which it applies to bound the connect + handshake the same way
+        every full connection does.
         """
         try:
             key = await asyncssh.get_server_host_key(
                 host,
                 port=port,
-                connect_timeout=get_settings().ssh_connect_timeout_seconds,
+                options=asyncssh.SSHClientConnectionOptions(
+                    **get_settings().ssh_connect_options
+                ),
             )
         except (OSError, asyncssh.Error) as exc:
             raise ProbeError(f"Could not reach {host}:{port}: {exc}") from exc
