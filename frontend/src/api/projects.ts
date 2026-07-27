@@ -6,7 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 
-import { apiClient, extractErrorMessage } from '@/api/client'
+import { apiClient, connectionFailureMessage, extractErrorMessage } from '@/api/client'
 
 // The single in-flight operation holding a project, or null when idle. Mirrors
 // the backend projects.active_operation column.
@@ -306,10 +306,13 @@ export function extractDeletionError(
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail
     if (detail && typeof detail === 'object') {
+      const failedStep =
+        typeof detail.failed_step === 'string' ? detail.failed_step : null
       return {
-        message: typeof detail.message === 'string' ? detail.message : fallback,
-        failedStep:
-          typeof detail.failed_step === 'string' ? detail.failed_step : null,
+        message:
+          connectionFailureMessage(failedStep) ??
+          (typeof detail.message === 'string' ? detail.message : fallback),
+        failedStep,
         steps: Array.isArray(detail.steps) ? detail.steps : [],
       }
     }

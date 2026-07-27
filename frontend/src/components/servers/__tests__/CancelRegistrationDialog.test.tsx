@@ -6,6 +6,10 @@ import { AxiosError } from 'axios'
 vi.mock('@/api/client', () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   extractErrorMessage: (_err: unknown, fallback: string) => fallback,
+  connectionFailureMessage: (failedStep: string | null) =>
+    failedStep === 'connect_ssh'
+      ? "Abstract couldn't reach the server. It may be powered off or unreachable — make sure it's online, then retry."
+      : null,
 }))
 
 import { apiClient } from '@/api/client'
@@ -38,6 +42,31 @@ function cleanupFailureError() {
             name: 'remove_authorized_key',
             status: 'failed',
             detail: 'could not connect to the server',
+            project_id: null,
+            project_name: null,
+          },
+        ],
+      },
+    },
+  } as never
+  return err
+}
+
+function unreachableError() {
+  const err = new AxiosError('Request failed', 'ERR_BAD_RESPONSE')
+  // The structured 502 body when Abstract never reached the box (connect_ssh).
+  err.response = {
+    data: {
+      detail: {
+        message: "Cancellation failed at step 'connect_ssh'.",
+        failed_step: 'connect_ssh',
+        failed_project_id: null,
+        failed_project_name: null,
+        steps: [
+          {
+            name: 'connect_ssh',
+            status: 'failed',
+            detail: 'Could not connect to the server: [Errno 110] Connection timed out',
             project_id: null,
             project_name: null,
           },
@@ -114,5 +143,25 @@ describe('CancelRegistrationDialog', () => {
     expect(
       screen.getByRole('button', { name: /retry cancellation/i }),
     ).toBeInTheDocument()
+  })
+
+  it('shows a clear unreachable message when the connect step fails', async () => {
+    const user = userEvent.setup()
+    useCancelRegistrationDialogStore.getState().openWith('srv-1')
+    post.mockRejectedValueOnce(unreachableError())
+
+    renderWithProviders(<CancelRegistrationDialog />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Cancel registration' }),
+    )
+
+    // The plain-language reason is surfaced, not the internal step name.
+    const alert = await screen.findByText(/Abstract couldn't reach the server/)
+    expect(alert).toBeInTheDocument()
+    expect(alert).toHaveTextContent(/powered off or unreachable/)
+    expect(screen.queryByText(/failed at step/i)).not.toBeInTheDocument()
+    // The technical detail is still available in the per-step list below.
+    expect(screen.getByText(/Errno 110/)).toBeInTheDocument()
   })
 })
