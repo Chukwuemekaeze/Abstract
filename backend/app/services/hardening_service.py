@@ -29,6 +29,7 @@ import asyncssh
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.logging_config import logger
 from app.models import Server
 from app.services.key_provider import KeyProvider
@@ -276,6 +277,7 @@ class HardeningService:
                 username=username,
                 client_keys=[asyncssh.import_private_key(app_private_key)],
                 known_hosts=known_hosts,
+                **get_settings().ssh_connect_options,
             ) as conn:
                 whoami = await conn.run("whoami", check=False)
                 if (whoami.stdout or "").strip() != username:

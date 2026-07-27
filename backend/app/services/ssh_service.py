@@ -151,7 +151,11 @@ class SSHService:
         the two except clauses below cover unreachable and timeout cases.
         """
         try:
-            key = await asyncssh.get_server_host_key(host, port=port)
+            key = await asyncssh.get_server_host_key(
+                host,
+                port=port,
+                connect_timeout=get_settings().ssh_connect_timeout_seconds,
+            )
         except (OSError, asyncssh.Error) as exc:
             raise ProbeError(f"Could not reach {host}:{port}: {exc}") from exc
 
@@ -235,6 +239,7 @@ class SSHService:
             password=password_from_client,
             client_keys=None,
             known_hosts=known_hosts,
+            **get_settings().ssh_connect_options,
         ) as conn:
             await self._write_key_and_harden(
                 conn, server, app_public_key, disable_password_auth
@@ -248,6 +253,7 @@ class SSHService:
                 username=server.username,
                 client_keys=[asyncssh.import_private_key(app_private_key)],
                 known_hosts=known_hosts,
+                **get_settings().ssh_connect_options,
             ) as verify_conn:
                 result = await verify_conn.run("whoami", check=False)
                 whoami_from_server = (result.stdout or "").strip()
@@ -297,6 +303,7 @@ class SSHService:
                 username=server.username,
                 client_keys=[asyncssh.import_private_key(key_bytes)],
                 known_hosts=known_hosts,
+                **get_settings().ssh_connect_options,
             )
         except asyncssh.HostKeyNotVerifiable as exc:
             server.status = "key_mismatch"
@@ -347,6 +354,7 @@ class SSHService:
                 username=server.username,
                 client_keys=[asyncssh.import_private_key(key_bytes)],
                 known_hosts=known_hosts,
+                **get_settings().ssh_connect_options,
             ) as conn:
                 result = await conn.run("echo ok", check=False)
                 return (result.stdout or "").strip() == "ok"

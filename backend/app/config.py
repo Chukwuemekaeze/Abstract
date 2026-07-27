@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     ssh_key_cache_ttl_minutes: int = 30
     ssh_pool_idle_timeout_minutes: int = 5
 
+    # SSH connection-establishment timeouts (seconds). Distinct from the per-command
+    # run() timeouts in the service modules: these bound only the connect + handshake +
+    # auth phase, which is the same work for every operation. Kept in seconds (not
+    # minutes) because they are naturally sub-minute. Without these, an unreachable box
+    # rides the OS TCP SYN-retry limit (~127s) before failing.
+    ssh_connect_timeout_seconds: int = 10
+    ssh_login_timeout_seconds: int = 60
+
     @property
     def session_ttl_seconds(self) -> int:
         return self.session_ttl_minutes * 60
@@ -60,6 +68,20 @@ class Settings(BaseSettings):
     @property
     def ssh_pool_idle_timeout_seconds(self) -> int:
         return self.ssh_pool_idle_timeout_minutes * 60
+
+    @property
+    def ssh_connect_options(self) -> dict[str, int]:
+        """Uniform connect/login timeouts spread into every asyncssh.connect() call.
+
+        connect_timeout bounds the TCP phase; login_timeout bounds banner/kex/auth so a
+        box that accepts the socket but stalls during handshake cannot hang past this.
+        login_timeout comfortably exceeds the re-registration forced-password-change
+        exchange, which is separately bounded by that module's overall deadline.
+        """
+        return {
+            "connect_timeout": self.ssh_connect_timeout_seconds,
+            "login_timeout": self.ssh_login_timeout_seconds,
+        }
 
 
 @lru_cache
