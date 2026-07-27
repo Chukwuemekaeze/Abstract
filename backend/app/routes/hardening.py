@@ -103,7 +103,9 @@ async def _atomic(db: AsyncSession, server: Server):
         raise HTTPException(409, exc.message) from exc
     except HostKeyMismatch as exc:
         await db.rollback()
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(
+            409, str(exc), headers={"X-Error-Code": "host_key_mismatch"}
+        ) from exc
     except HardeningError as exc:
         await db.rollback()
         raise HTTPException(

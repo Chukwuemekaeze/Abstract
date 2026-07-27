@@ -628,7 +628,9 @@ async def smoke_test(
             key_provider=key_provider,
         )
     except HostKeyMismatch as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(
+            409, str(exc), headers={"X-Error-Code": "host_key_mismatch"}
+        ) from exc
     except (ProbeError, OSError) as exc:
         raise HTTPException(502, str(exc)) from exc
 
