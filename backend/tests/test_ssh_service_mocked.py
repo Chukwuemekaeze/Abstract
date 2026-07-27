@@ -112,6 +112,41 @@ async def test_probe_unreachable_raises_probe_error(mocker):
         await SSHService().probe("203.0.113.10", 22, "root")
 
 
+async def test_connection_establishment_carries_uniform_timeouts(mocker):
+    """Every connect + the probe pass the central connect/login timeouts, so an
+    unreachable box fails fast (~15s) instead of riding the OS TCP timeout (~127s)."""
+    from app.config import get_settings
+
+    opts = get_settings().ssh_connect_options
+    assert set(opts) == {"connect_timeout", "login_timeout"}
+
+    conn = FakeConn(whoami="root")
+    host_key_mock = mocker.patch.object(
+        ssh_mod.asyncssh, "get_server_host_key", mocker.AsyncMock(return_value=FakeKey())
+    )
+    connect_mock = mocker.patch.object(
+        ssh_mod.asyncssh, "connect", return_value=FakeConnect(conn)
+    )
+    mocker.patch.object(ssh_mod.asyncssh, "import_known_hosts", return_value=object())
+    mocker.patch.object(ssh_mod.asyncssh, "import_private_key", return_value=object())
+
+    # probe: connect_timeout only (no auth phase).
+    await SSHService().probe("203.0.113.10", 22, "root")
+    assert host_key_mock.call_args.kwargs["connect_timeout"] == opts["connect_timeout"]
+
+    # a full connect: both connect_timeout and login_timeout.
+    await SSHService().install_key(
+        server=FakeServer(),
+        password_from_client="hunter2",
+        app_public_key="ssh-ed25519 AAAAAPPKEY app-deploy-x",
+        app_private_key=b"PRIVATEKEYBYTES",
+        disable_password_auth=True,
+    )
+    for call in connect_mock.call_args_list:
+        assert call.kwargs["connect_timeout"] == opts["connect_timeout"]
+        assert call.kwargs["login_timeout"] == opts["login_timeout"]
+
+
 async def test_install_key_runs_full_sequence_with_hardening(mocker):
     conn = FakeConn(whoami="root")
     mocker.patch.object(

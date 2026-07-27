@@ -32,6 +32,7 @@ from clerk_backend_api import Clerk
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.logging_config import logger
 from app.models import AppSshKey, Project, ProjectDeployKey, Server, User
 from app.services.app_key_service import create_key_for_server
@@ -370,6 +371,7 @@ async def _open_access(
             kbdint_auth=True,
             client_keys=None,
             known_hosts=known_hosts,
+            **get_settings().ssh_connect_options,
         )
     except asyncssh.PermissionDenied as exc:
         # The server offered a password method but rejected the credential, versus never
@@ -419,6 +421,7 @@ async def _verify_password(target: AccessTarget, password: str) -> bool:
             password=password,
             client_keys=None,
             known_hosts=known_hosts,
+            **get_settings().ssh_connect_options,
         ) as conn:
             result = await conn.run("whoami", check=False)
             return (result.stdout or "").strip() == target.username
@@ -458,6 +461,7 @@ async def try_resume_with_pending_key(
             username=target.username,
             client_keys=[asyncssh.import_private_key(app_private_key)],
             known_hosts=known_hosts,
+            **get_settings().ssh_connect_options,
         ) as conn:
             result = await conn.run("whoami", check=False)
             return (result.stdout or "").strip() == target.username
@@ -530,6 +534,7 @@ async def install_public_key(
             password=working_password,
             client_keys=None,
             known_hosts=known_hosts,
+            **get_settings().ssh_connect_options,
         ) as conn:
             await _append_authorized_key(conn, app_public_key)
     except (OSError, asyncssh.Error) as exc:

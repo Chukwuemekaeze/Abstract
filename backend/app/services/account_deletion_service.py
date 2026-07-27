@@ -78,6 +78,27 @@ class ClerkAccountDeletionError(Exception):
     from the app's point of view."""
 
 
+def _blocking_server_message(server_name: str, failed_step: str) -> str:
+    """A clean, user-facing reason a server blocked account deletion, built from the
+    failed teardown step. Never embeds the internal step name (the raw
+    ServerDeletionError.message names steps like 'connect_ssh', which must not leak to
+    the user). The frontend rebuilds the same sentence from the step list; keep the
+    two in sync."""
+    # 'connect_ssh' is the first VPS step: we never reached the box at all.
+    if failed_step == "connect_ssh":
+        return (
+            f"Server '{server_name}' couldn't be reached, so it wasn't torn down. "
+            f"Make sure it's powered on and online, then try again — or delete that "
+            f"server first."
+        )
+    # The box answered but a later teardown step failed. Same resolve-or-delete
+    # escape hatch, without naming the internal step.
+    return (
+        f"Server '{server_name}' couldn't be fully torn down. Resolve or delete that "
+        f"server, then try again."
+    )
+
+
 async def delete_account(
     *,
     current_user: User,
@@ -139,11 +160,7 @@ async def delete_account(
             ) from exc
         except ServerDeletionError as exc:
             raise AccountDeletionError(
-                message=(
-                    f"Server '{server_name}' could not be torn down "
-                    f"({exc.message}). Resolve or delete that server, then delete "
-                    f"your account again."
-                ),
+                message=_blocking_server_message(server_name, exc.failed_step),
                 blocking_server_id=server_id,
                 blocking_server_name=server_name,
                 steps=exc.steps,
