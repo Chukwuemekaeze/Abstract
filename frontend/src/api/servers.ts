@@ -7,7 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 
-import { apiClient, extractErrorMessage } from '@/api/client'
+import { apiClient, connectionFailureMessage, extractErrorMessage } from '@/api/client'
 import { projectKeys } from '@/api/projects'
 
 // Mirrors the backend server status check constraint.
@@ -471,10 +471,13 @@ export function extractServerDeletionError(
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail
     if (detail && typeof detail === 'object') {
+      const failedStep =
+        typeof detail.failed_step === 'string' ? detail.failed_step : null
       return {
-        message: typeof detail.message === 'string' ? detail.message : fallback,
-        failedStep:
-          typeof detail.failed_step === 'string' ? detail.failed_step : null,
+        message:
+          connectionFailureMessage(failedStep) ??
+          (typeof detail.message === 'string' ? detail.message : fallback),
+        failedStep,
         failedProjectName:
           typeof detail.failed_project_name === 'string'
             ? detail.failed_project_name

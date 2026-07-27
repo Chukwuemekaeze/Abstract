@@ -40,6 +40,20 @@ export function extractErrorMessage(error: unknown, fallback = 'Something went w
   return fallback
 }
 
+// A clean, user-facing message for a teardown that failed at the very first VPS
+// step, 'connect_ssh': Abstract never reached the box (it is powered off, firewalled,
+// or otherwise unreachable). Returned in place of the raw backend "failed at step
+// 'connect_ssh'" text so the top-line message reads plainly; the technical per-step
+// detail is still shown in the step list below it. Returns null for any other step so
+// the caller keeps the backend's own message.
+export function connectionFailureMessage(failedStep: string | null): string | null {
+  if (failedStep !== 'connect_ssh') return null
+  return (
+    "Abstract couldn't reach the server. It may be powered off or unreachable — " +
+    "make sure it's online, then retry."
+  )
+}
+
 // Pull a hardening failure out of an axios error. Hardening endpoints return a
 // structured detail object { message, captured_output } on a 502 so the UI can show
 // the raw shell output in a collapsible panel. Falls back to extractErrorMessage for
