@@ -632,7 +632,13 @@ async def smoke_test(
             409, str(exc), headers={"X-Error-Code": "host_key_mismatch"}
         ) from exc
     except (ProbeError, OSError) as exc:
-        raise HTTPException(502, str(exc)) from exc
+        # An unreachable box (e.g. a bounded connect timeout, which is an OSError with
+        # an empty str()) must still yield a message the UI can show, not a blank one.
+        detail = str(exc).strip() or (
+            f"Abstract couldn't reach {server.host} over SSH. It may be powered off "
+            "or unreachable — make sure it's online, then retry."
+        )
+        raise HTTPException(502, detail) from exc
 
     return CommandResultResponse(
         stdout=result.stdout,
