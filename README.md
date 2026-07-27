@@ -421,6 +421,18 @@ is the Clerk session id so it is also scoped per login. Because that plaintext i
 sensitive, the dev Redis container runs with `--appendonly no --save ""` and no
 volume: nothing is ever written to disk and the cache does not survive a restart.
 
+### Bounded SSH connection timeouts
+
+Every connection to a VPS is opened with a uniform connect/login timeout
+(`SSH_CONNECT_TIMEOUT_SECONDS`, `SSH_LOGIN_TIMEOUT_SECONDS`), defined once in
+`config.py` and spread into every `asyncssh.connect`. Without it an unreachable box
+rides the OS TCP retry limit (~127s) before failing; with it an unreachable server is
+detected in seconds, so a stalled reboot poll, a probe against a wrong host, or the
+strict-abort account/server deletion above all fail fast instead of hanging. This is
+distinct from the per-command run timeouts in the service modules, which vary by
+operation (a `docker compose up --build` gets minutes; a `whoami` does not) and are
+deliberately not centralized.
+
 ### The `_from_client` convention
 
 Any value that originates from a request (body, path, query, header) is named with a
