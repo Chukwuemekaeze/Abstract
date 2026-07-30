@@ -12,6 +12,15 @@
     --radius-2xl: calc(var(--radius) * 1.8);
     --radius-3xl: calc(var(--radius) * 2.2);
     --radius-4xl: calc(var(--radius) * 2.6);
+    /* Abstract brand colors as Tailwind utilities: bg-surface, text-cyan,
+       text-text-dim, bg-ink, etc. `border` already maps below via --color-border. */
+    --color-ink: var(--abstract-ink);
+    --color-surface: var(--abstract-surface);
+    --color-cyan: var(--abstract-cyan);
+    --color-cyan-bright: var(--abstract-cyan-bright);
+    --color-cyan-deep: var(--abstract-cyan-deep);
+    --color-text: var(--abstract-text);
+    --color-text-dim: var(--abstract-text-dim);
     --color-background: var(--background);
     --color-foreground: var(--foreground);
     --color-card: var(--card);
@@ -46,25 +55,38 @@
 }
 
 :root {
+    /* Abstract brand palette (exact hex, source of truth). */
+    --abstract-ink: #050608;
+    --abstract-surface: #0A0E12;
+    --abstract-cyan: #22D3EE;
+    --abstract-cyan-bright: #67E8F9;
+    --abstract-cyan-deep: #06B6D4;
+    --abstract-text: #E8EDF2;
+    --abstract-text-dim: #8B96A3;
+    --abstract-border: #1B232C;
+
     --radius: 0.625rem;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    /* shadcn semantic tokens remapped to the Abstract dark palette. Two derived
+       shades (#0E141A elevated card, #141B22 subtle panel) sit between surface
+       and border for depth; everything else references the brand vars above. */
+    --background: var(--abstract-surface);
+    --foreground: var(--abstract-text);
+    --card: #0E141A;
+    --card-foreground: var(--abstract-text);
+    --popover: #0E141A;
+    --popover-foreground: var(--abstract-text);
+    --primary: var(--abstract-cyan);
+    --primary-foreground: var(--abstract-ink);
+    --secondary: #141B22;
+    --secondary-foreground: var(--abstract-text);
+    --muted: #141B22;
+    --muted-foreground: var(--abstract-text-dim);
+    --accent: #141B22;
+    --accent-foreground: var(--abstract-text);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: var(--abstract-border);
+    --input: var(--abstract-border);
+    --ring: var(--abstract-cyan-deep);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
