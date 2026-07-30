@@ -1,69 +1,84 @@
-// Top-level projects page: every project across all servers, newest first,
-// plus the New Project dialog (opened with a freely selectable server).
+// Projects page: a table of every project on the left and a detail panel for the
+// selected project on the right. Rendered inside the AppShell layout.
 
+import { useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 
 import { extractErrorMessage } from '@/api/client'
 import { useProjects } from '@/api/projects'
-import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
-import { ProjectCard } from '@/components/projects/ProjectCard'
+import { ProjectDetailPanel } from '@/components/projects/ProjectDetailPanel'
+import { ProjectsTable } from '@/components/projects/ProjectsTable'
 import { Button } from '@/components/ui/button'
 import { useNewProjectStore } from '@/store/newProjectStore'
 
 export function ProjectsPage() {
   const openNewProject = useNewProjectStore((s) => s.open)
   const projects = useProjects()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  const list = useMemo(() => projects.data ?? [], [projects.data])
+
+  // Keep a valid selection: default to the first project, and fall back to it if
+  // the selected project disappears (e.g. after a delete).
+  const selected = useMemo(
+    () => list.find((p) => p.id === selectedId) ?? list[0] ?? null,
+    [list, selectedId],
+  )
 
   return (
-    <>
-      <Header />
-      <div className="mx-auto max-w-5xl px-6 py-10">
-        <header className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Projects</h1>
-            <p className="text-muted-foreground text-sm">
-              GitHub repos cloned onto your servers with dedicated deploy keys.
-            </p>
-          </div>
-          <Button onClick={() => openNewProject()}>New Project</Button>
-        </header>
-
-        {projects.isLoading && (
-          <div className="flex items-center gap-3 py-8">
-            <Loader2 className="size-5 animate-spin" />
-            <span>Loading projects...</span>
-          </div>
-        )}
-
-        {projects.isError && (
-          <p className="text-destructive text-sm">
-            {extractErrorMessage(projects.error, 'Could not load projects.')}
+    <div className="flex h-full flex-col">
+      <header className="flex items-start justify-between px-8 py-10 pb-6">
+        <div>
+          <h1 className="text-3xl">Projects</h1>
+          <p className="mt-1 text-sm text-text-dim">
+            GitHub repos cloned onto your servers.
           </p>
-        )}
+        </div>
+        <Button onClick={() => openNewProject()}>New project</Button>
+      </header>
 
-        {projects.data && projects.data.length === 0 && (
-          <div className="rounded-lg border border-dashed py-16 text-center">
-            <p className="text-lg font-medium">No projects yet</p>
-            <p className="text-muted-foreground mb-4 text-sm">
-              Clone a GitHub repo onto one of your servers to get started.
-            </p>
-            <Button onClick={() => openNewProject()}>
-              Create your first project
-            </Button>
+      {projects.isLoading && (
+        <div className="flex items-center gap-3 px-8 py-8 text-text-dim">
+          <Loader2 className="size-5 animate-spin" />
+          <span>Loading projects...</span>
+        </div>
+      )}
+
+      {projects.isError && (
+        <p className="px-8 text-sm text-destructive">
+          {extractErrorMessage(projects.error, 'Could not load projects.')}
+        </p>
+      )}
+
+      {projects.data && list.length === 0 && (
+        <div className="mx-8 rounded-lg border border-dashed border-border py-16 text-center">
+          <p className="font-display text-lg font-bold tracking-[-0.02em]">
+            No projects yet
+          </p>
+          <p className="mb-4 text-sm text-text-dim">
+            Clone a GitHub repo onto one of your servers to get started.
+          </p>
+          <Button onClick={() => openNewProject()}>
+            Create your first project
+          </Button>
+        </div>
+      )}
+
+      {list.length > 0 && (
+        <div className="grid min-h-0 flex-1 grid-cols-[1fr_28rem]">
+          <div className="overflow-y-auto px-8">
+            <ProjectsTable
+              projects={list}
+              selectedId={selected?.id ?? null}
+              onSelect={setSelectedId}
+            />
           </div>
-        )}
+          {selected && <ProjectDetailPanel key={selected.id} project={selected} />}
+        </div>
+      )}
 
-        {projects.data && projects.data.length > 0 && (
-          <div className="flex flex-col gap-4">
-            {projects.data.map((project) => (
-              <ProjectCard key={project.id} project={project} />
-            ))}
-          </div>
-        )}
-
-        <NewProjectDialog />
-      </div>
-    </>
+      <NewProjectDialog />
+    </div>
   )
 }
