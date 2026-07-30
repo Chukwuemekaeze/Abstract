@@ -27,7 +27,13 @@ export function Header() {
     <header className="border-b">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3">
         <div className="flex items-center gap-6">
-          <h1 className="text-lg font-semibold">Abstract</h1>
+          <NavLink to="/" aria-label="Abstract home">
+            <img
+              src="/brand/abstract-lockup-glow.svg"
+              alt="Abstract"
+              className="h-8 w-auto"
+            />
+          </NavLink>
           <nav className="flex items-center gap-4">
             <NavLink to="/" end className={navLinkClass}>
               Servers
