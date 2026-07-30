@@ -74,3 +74,6 @@ docker-compose.override.yml
 
 
 .claude
+
+# WSL/Windows metadata sidecar files
+*:Zone.Identifier
