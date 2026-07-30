@@ -5,6 +5,14 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+    /* Abstract type system. Space Grotesk is the display voice (headings, page
+       titles, stats, hero copy); Geist Sans is the workhorse default (font-sans);
+       Geist Mono carries all machine data. Family names match what the installed
+       @fontsource packages register. */
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-sans: 'Geist Variable', 'Geist', sans-serif;
+    --font-mono: 'Geist Mono Variable', 'Geist Mono', monospace;
+
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -137,10 +145,24 @@
 }
 
 @layer base {
+  /* Global type scale: 120% of the browser default so every rem-based font
+     size is 20% larger. Remove this rule to return to normal sizing. */
+  html {
+    font-size: 120%;
+    }
   * {
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
+    }
+  /* Display headings (page titles, section headings) speak in Space Grotesk,
+     Medium by default with slightly tighter tracking; hero moments opt into
+     font-bold. Small section labels stay Geist, so only h1 and h2 are display.
+     Body copy stays Geist at natural spacing. */
+  h1, h2 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.02em;
     }
 }
