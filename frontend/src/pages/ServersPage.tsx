@@ -15,7 +15,7 @@ export function ServersPage() {
     <div className="mx-auto max-w-6xl px-8 py-10">
       <header className="mb-8 flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Servers</h1>
+          <h1 className="text-3xl">Servers</h1>
           <p className="mt-1 text-sm text-text-dim">
             Register a VPS, verify its host key, and deploy.
           </p>

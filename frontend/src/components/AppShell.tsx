@@ -44,7 +44,9 @@ function SummaryRow({
   return (
     <div className="flex items-center justify-between px-3 py-1 text-sm">
       <span className="text-text-dim">{label}</span>
-      <span className={cn('font-medium tabular-nums', toneClass)}>{value}</span>
+      <span className={cn('font-display font-medium tabular-nums', toneClass)}>
+        {value}
+      </span>
     </div>
   )
 }
@@ -79,7 +81,7 @@ export function AppShell() {
     cn(
       'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
       isActive
-        ? 'bg-card text-foreground'
+        ? 'bg-card font-medium text-foreground'
         : 'text-text-dim hover:bg-card/60 hover:text-foreground',
     )
 
@@ -91,7 +93,10 @@ export function AppShell() {
             <img
               src="/brand/abstract-lockup-glow.svg"
               alt="Abstract"
-              className="h-7 w-auto"
+              // Sized so the "abstract" wordmark reads at ~120% of the text-sm
+              // nav labels below. The lockup is 640x240 with the word set at
+              // font-size 98, so height = 1.2 * 0.875rem * 240 / 98 ~= 2.57rem.
+              className="h-[3.57rem] w-auto"
             />
           </NavLink>
         </div>
@@ -106,7 +111,7 @@ export function AppShell() {
         </nav>
 
         <div className="mt-8 px-3">
-          <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-text-dim/70">
+          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-[0.06em] text-text-dim/70">
             {onProjects ? 'Projects' : 'Fleet'}
           </p>
           {onProjects ? (

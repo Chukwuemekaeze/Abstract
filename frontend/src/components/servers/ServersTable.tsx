@@ -73,7 +73,6 @@ function ServerRow({
             type="button"
             size="sm"
             variant="ghost"
-            className="text-cyan hover:text-cyan-bright"
             onClick={() => resume(server)}
           >
             Verify
@@ -108,7 +107,7 @@ function HostKeyCheckCard({ server }: { server: Server }) {
     <div className="mt-6 rounded-lg border border-amber-500/40 p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="text-base font-medium text-foreground">
+          <h3 className="text-base font-semibold text-foreground">
             {server.name} needs a host key check
           </h3>
           <p className="mt-1 max-w-xl text-sm text-text-dim">
@@ -163,7 +162,9 @@ export function ServersTable() {
   if (!servers || servers.length === 0) {
     return (
       <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border py-16">
-        <p className="text-text-dim">No servers yet.</p>
+        <p className="font-display text-lg font-bold tracking-[-0.02em] text-text-dim">
+          No servers yet.
+        </p>
         <Button onClick={openAddServer}>Add your first server</Button>
       </div>
     )
@@ -179,7 +180,7 @@ export function ServersTable() {
 
   return (
     <div>
-      <div className="grid grid-cols-[2fr_1.5fr_0.6fr_1.6fr_auto] gap-4 border-b border-border px-4 pb-2 text-xs font-medium uppercase tracking-wide text-text-dim">
+      <div className="grid grid-cols-[2fr_1.5fr_0.6fr_1.6fr_auto] gap-4 border-b border-border px-4 pb-2 text-xs font-semibold uppercase tracking-[0.06em] text-text-dim">
         <span>Server</span>
         <span>Address</span>
         <span>Projects</span>

@@ -45,7 +45,7 @@ export function ProjectsTable({
 }) {
   return (
     <div>
-      <div className="grid grid-cols-[2fr_1.6fr_0.8fr] gap-4 border-b border-border px-4 pb-2 text-xs font-medium uppercase tracking-wide text-text-dim">
+      <div className="grid grid-cols-[2fr_1.6fr_0.8fr] gap-4 border-b border-border px-4 pb-2 text-xs font-semibold uppercase tracking-[0.06em] text-text-dim">
         <span>Project</span>
         <span>Server / Domain</span>
         <span>State</span>
@@ -78,7 +78,9 @@ export function ProjectsTable({
                 {project.server_name ?? 'unknown server'}
               </div>
               {project.domain ? (
-                <div className="truncate text-xs text-cyan">{project.domain}</div>
+                <div className="truncate text-xs text-text-dim">
+                  {project.domain}
+                </div>
               ) : (
                 <div className="text-xs text-text-dim/60">no domain</div>
               )}

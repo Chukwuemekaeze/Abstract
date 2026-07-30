@@ -99,7 +99,9 @@ export function VersionHistorySection({ project }: { project: Project }) {
 
   return (
     <div className="flex flex-col gap-1">
-      <h4 className="text-sm font-medium">Version history</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-text-dim">
+        Version history
+      </h4>
 
       {runs.isPending && (
         <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">

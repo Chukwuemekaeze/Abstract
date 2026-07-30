@@ -57,7 +57,7 @@ export function ProjectDetailPanel({ project }: { project: Project }) {
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto border-l border-border p-6">
       <div>
-        <h2 className="text-xl font-semibold">{project.name}</h2>
+        <h2 className="text-xl">{project.name}</h2>
         <p className="mt-1 text-sm">
           <StatusLine project={project} />
         </p>

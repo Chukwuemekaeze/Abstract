@@ -60,7 +60,9 @@ export function EnvFilesSection({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs font-medium text-muted-foreground">Environment</p>
+      <p className="text-xs font-semibold uppercase tracking-[0.06em] text-text-dim">
+        Environment
+      </p>
 
       {files.length === 0 ? (
         <div className="flex flex-col items-start gap-2">

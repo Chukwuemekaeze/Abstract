@@ -113,7 +113,7 @@ function PendingServerDetail({ server }: { server: Server }) {
     <div className="flex flex-col gap-6">
       <div>
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold">{server.name}</h1>
+          <h1 className="text-2xl">{server.name}</h1>
           <Badge className={status.className}>{status.label}</Badge>
         </div>
         <p className="text-muted-foreground text-sm">
@@ -174,7 +174,7 @@ function KeyMismatchServerDetail({ server }: { server: Server }) {
     <div className="flex flex-col gap-6">
       <div>
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold">{server.name}</h1>
+          <h1 className="text-2xl">{server.name}</h1>
           <Badge className={status.className}>{status.label}</Badge>
         </div>
         <p className="text-muted-foreground text-sm">
@@ -371,7 +371,7 @@ function ServerDetail({ server }: { server: Server }) {
       {/* Header */}
       <div>
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold">{server.name}</h1>
+          <h1 className="text-2xl">{server.name}</h1>
           <div className="flex items-center gap-2">
             <Badge className={status.className}>{status.label}</Badge>
             <Button
@@ -428,7 +428,7 @@ function ServerDetail({ server }: { server: Server }) {
       <ProjectsSection server={server} />
 
       <div className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Operations</h2>
+        <h2 className="text-lg">Operations</h2>
 
         <OperationCard
           title="Update system"
@@ -705,7 +705,7 @@ function ProjectsSection({ server }: { server: Server }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Projects</h2>
+        <h2 className="text-lg">Projects</h2>
         {projects.data && projects.data.length > 0 && (
           <Button
             size="sm"

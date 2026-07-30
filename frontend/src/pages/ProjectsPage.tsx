@@ -30,7 +30,7 @@ export function ProjectsPage() {
     <div className="flex h-full flex-col">
       <header className="flex items-start justify-between px-8 py-10 pb-6">
         <div>
-          <h1 className="text-3xl font-bold">Projects</h1>
+          <h1 className="text-3xl">Projects</h1>
           <p className="mt-1 text-sm text-text-dim">
             GitHub repos cloned onto your servers.
           </p>
@@ -53,7 +53,9 @@ export function ProjectsPage() {
 
       {projects.data && list.length === 0 && (
         <div className="mx-8 rounded-lg border border-dashed border-border py-16 text-center">
-          <p className="text-lg font-medium">No projects yet</p>
+          <p className="font-display text-lg font-bold tracking-[-0.02em]">
+            No projects yet
+          </p>
           <p className="mb-4 text-sm text-text-dim">
             Clone a GitHub repo onto one of your servers to get started.
           </p>
