@@ -84,7 +84,7 @@ export function RollbackDialog({
 
         {failureOutput && (
           <div className="space-y-2">
-            <p className="text-sm text-destructive">
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm font-medium text-destructive">
               The rollback build failed. The server is left at commit {shortSha};
               you can roll back again or start forward.
             </p>

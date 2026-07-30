@@ -140,7 +140,7 @@ function PublishDialogOpen({
               href={`https://${domain.trim().toLowerCase()}`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-lg font-medium text-green-700 hover:underline"
+              className="inline-flex items-center gap-1.5 text-lg font-medium text-cyan hover:text-cyan-bright hover:underline"
             >
               https://{domain.trim().toLowerCase()}
               <ExternalLink className="size-4" />
@@ -156,7 +156,7 @@ function PublishDialogOpen({
               </DialogDescription>
             </DialogHeader>
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="size-6 animate-spin text-muted-foreground" />
+              <Loader2 className="size-6 animate-spin text-cyan" />
             </div>
           </>
         ) : (
@@ -231,14 +231,14 @@ function PublishDialogOpen({
                     </SelectContent>
                   </Select>
                 ) : (
-                  <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200">
                     No ports are published from your containers. Add a{' '}
                     <code>ports:</code> section to your docker-compose.yml,
                     pull the latest code, and restart your app.
                   </div>
                 )}
                 {!manualEntry && hiddenCount > 0 && (
-                  <p className="text-xs text-amber-700">
+                  <p className="text-xs text-amber-300">
                     {hiddenCount} port{hiddenCount === 1 ? ' was' : 's were'}{' '}
                     hidden because they look like database ports. Use manual
                     entry to override if you know what you are doing.
@@ -256,8 +256,10 @@ function PublishDialogOpen({
               </div>
 
               {error && (
-                <div className="flex flex-col gap-1">
-                  <p className="text-sm text-red-600">{error.message}</p>
+                <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3">
+                  <p className="text-sm font-medium text-destructive">
+                    {error.message}
+                  </p>
                   {error.output && (
                     <div>
                       <button
