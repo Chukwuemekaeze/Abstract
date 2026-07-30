@@ -29,7 +29,6 @@ import {
   useUpdateSystemMutation,
 } from '@/api/servers'
 import { useProjectsByServer } from '@/api/projects'
-import { Header } from '@/components/Header'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
 import { DeleteServerDialog } from '@/components/servers/DeleteServerDialog'
 import { ReregisterDialog } from '@/components/servers/ReregisterDialog'
@@ -67,13 +66,11 @@ export function ServerDetailPage() {
   const { data: server, isLoading, isError } = useServer(id)
 
   return (
-    <>
-      <Header />
-      <div className="mx-auto max-w-3xl px-6 py-10">
-        <Link
-          to="/"
-          className="mb-6 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
+    <div className="mx-auto max-w-3xl px-6 py-10">
+      <Link
+        to="/"
+        className="mb-6 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
           <ArrowLeft className="size-4" />
           Back to servers
         </Link>
@@ -93,8 +90,7 @@ export function ServerDetailPage() {
           ) : (
             <ServerDetail server={server} />
           ))}
-      </div>
-    </>
+    </div>
   )
 }
 

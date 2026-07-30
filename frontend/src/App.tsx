@@ -6,6 +6,7 @@ import { useAuth } from '@clerk/clerk-react'
 import { useEffect } from 'react'
 import { Route, Routes } from 'react-router-dom'
 
+import { AppShell } from '@/components/AppShell'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Toaster } from '@/components/ui/sonner'
 import { setTokenGetter } from '@/lib/auth-token'
@@ -28,30 +29,18 @@ function App() {
       <Routes>
         <Route path="/sign-in/*" element={<SignInPage />} />
         <Route path="/sign-up/*" element={<SignUpPage />} />
+        {/* Protected routes share the sidebar shell via a layout route. */}
         <Route
-          path="/"
           element={
             <ProtectedRoute>
-              <ServersPage />
+              <AppShell />
             </ProtectedRoute>
           }
-        />
-        <Route
-          path="/servers/:id"
-          element={
-            <ProtectedRoute>
-              <ServerDetailPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/projects"
-          element={
-            <ProtectedRoute>
-              <ProjectsPage />
-            </ProtectedRoute>
-          }
-        />
+        >
+          <Route path="/" element={<ServersPage />} />
+          <Route path="/servers/:id" element={<ServerDetailPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+        </Route>
       </Routes>
       {/* Global toast outlet, mounted once at the root. */}
       <Toaster richColors />
