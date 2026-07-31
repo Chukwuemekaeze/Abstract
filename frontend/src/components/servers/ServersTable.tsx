@@ -8,6 +8,7 @@
 // the recent-activity feed (no endpoint).
 
 import { Loader2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { extractErrorMessage } from '@/api/client'
@@ -58,7 +59,12 @@ function ServerRow({
     <div className="grid grid-cols-[2fr_1.5fr_0.6fr_1.6fr_auto] items-center gap-4 border-b border-border px-4 py-4 text-sm">
       <div className="flex items-center gap-2.5">
         <span className={cn('size-2 shrink-0 rounded-full', STATUS_DOT[server.status])} />
-        <span className="font-medium text-foreground">{server.name}</span>
+        <Link
+          to={`/servers/${server.id}`}
+          className="truncate font-medium text-foreground hover:text-cyan-bright hover:underline"
+        >
+          {server.name}
+        </Link>
       </div>
       <span className="font-mono text-xs text-text-dim">
         {server.host}:{server.port}
