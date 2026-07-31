@@ -62,7 +62,7 @@ export function ProjectsTable({
             className={cn(
               'grid w-full grid-cols-[2fr_1.6fr_0.8fr] items-center gap-4 border-b border-l-2 border-border px-4 py-4 text-left transition-colors',
               isSelected
-                ? 'border-l-cyan bg-card'
+                ? 'border-l-transparent bg-cyan/15'
                 : 'border-l-transparent hover:bg-card/50',
             )}
           >

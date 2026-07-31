@@ -26,9 +26,9 @@ export function AppShell() {
 
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     cn(
-      'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+      'flex items-center gap-3 rounded-md border border-transparent px-3 py-2 text-sm transition-colors',
       isActive
-        ? 'bg-card font-medium text-foreground'
+        ? 'border-cyan/40 bg-cyan/15 font-medium text-cyan-bright'
         : 'text-text-dim hover:bg-card/60 hover:text-foreground',
     )
 
