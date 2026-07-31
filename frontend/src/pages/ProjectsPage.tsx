@@ -19,10 +19,10 @@ export function ProjectsPage() {
 
   const list = useMemo(() => projects.data ?? [], [projects.data])
 
-  // Keep a valid selection: default to the first project, and fall back to it if
-  // the selected project disappears (e.g. after a delete).
+  // The selected project drives the slide-out detail drawer; null means collapsed.
+  // If the selected project disappears (e.g. after a delete) the drawer collapses.
   const selected = useMemo(
-    () => list.find((p) => p.id === selectedId) ?? list[0] ?? null,
+    () => list.find((p) => p.id === selectedId) ?? null,
     [list, selectedId],
   )
 
@@ -66,17 +66,19 @@ export function ProjectsPage() {
       )}
 
       {list.length > 0 && (
-        <div className="grid min-h-0 flex-1 grid-cols-[1fr_28rem]">
-          <div className="overflow-y-auto px-8">
-            <ProjectsTable
-              projects={list}
-              selectedId={selected?.id ?? null}
-              onSelect={setSelectedId}
-            />
-          </div>
-          {selected && <ProjectDetailPanel key={selected.id} project={selected} />}
+        <div className="min-h-0 flex-1 overflow-y-auto px-8">
+          <ProjectsTable
+            projects={list}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
         </div>
       )}
+
+      <ProjectDetailPanel
+        project={selected}
+        onClose={() => setSelectedId(null)}
+      />
 
       <NewProjectDialog />
     </div>
