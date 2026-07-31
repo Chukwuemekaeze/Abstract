@@ -27,17 +27,14 @@ import {
 import { useAddServerStore } from '@/store/addServerStore'
 import { useCancelRegistrationDialogStore } from '@/store/cancel-registration-dialog'
 
-// Map each status to a badge variant and label. key_mismatch is the alarming one.
+// Map each status to a badge tone and label. key_mismatch is the alarming one.
 const STATUS_META: Record<
   ServerStatus,
-  { label: string; className: string }
+  { label: string; variant: 'success' | 'pending' | 'danger' }
 > = {
-  verified: { label: 'verified', className: 'bg-green-600 text-white' },
-  pending_verification: {
-    label: 'pending',
-    className: 'bg-yellow-500 text-black',
-  },
-  key_mismatch: { label: 'key mismatch', className: 'bg-red-600 text-white' },
+  verified: { label: 'verified', variant: 'success' },
+  pending_verification: { label: 'pending', variant: 'pending' },
+  key_mismatch: { label: 'key mismatch', variant: 'danger' },
 }
 
 export function ServerCard({ server }: { server: Server }) {
@@ -84,7 +81,7 @@ export function ServerCard({ server }: { server: Server }) {
           {server.username}@{server.host}:{server.port}
         </CardDescription>
         <CardAction>
-          <Badge className={status.className}>{status.label}</Badge>
+          <Badge variant={status.variant}>{status.label}</Badge>
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

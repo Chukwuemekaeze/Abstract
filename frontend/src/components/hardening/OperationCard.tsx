@@ -46,7 +46,7 @@ function StatusBadge({
 }) {
   if (status === 'running') {
     return (
-      <Badge variant="secondary">
+      <Badge variant="cyan">
         <Loader2 className="mr-1 size-3 animate-spin" />
         Running...
       </Badge>
@@ -54,7 +54,7 @@ function StatusBadge({
   }
   if (status === 'success') {
     return (
-      <Badge className="bg-green-600 text-white">
+      <Badge variant="success">
         <Check className="mr-1 size-3" />
         {statusLabel}
       </Badge>
@@ -62,13 +62,13 @@ function StatusBadge({
   }
   if (status === 'failed') {
     return (
-      <Badge className="bg-red-600 text-white">
+      <Badge variant="danger">
         <X className="mr-1 size-3" />
         Failed
       </Badge>
     )
   }
-  return <Badge variant="outline">{statusLabel}</Badge>
+  return <Badge variant="neutral">{statusLabel}</Badge>
 }
 
 export function OperationCard({

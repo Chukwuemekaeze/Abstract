@@ -73,7 +73,7 @@
     --abstract-text-dim: #8B96A3;
     --abstract-border: #1B232C;
 
-    --radius: 0.625rem;
+    --radius: 0.125rem;
     /* shadcn semantic tokens remapped to the Abstract dark palette. Two derived
        shades (#0E141A elevated card, #141B22 subtle panel) sit between surface
        and border for depth; everything else references the brand vars above. */
@@ -164,5 +164,17 @@
     font-family: var(--font-display);
     font-weight: 500;
     letter-spacing: -0.02em;
+    }
+}
+
+@layer utilities {
+  /* Glow keyed off currentColor so a single class works for any tone: pair it
+     with a bright text color to get the translucent "glowing text" look, and
+     with a translucent tinted background/border for the glass-pill effect. */
+  .text-glow {
+    text-shadow: 0 0 8px color-mix(in srgb, currentColor 55%, transparent);
+    }
+  .glow-ring {
+    box-shadow: 0 0 16px -6px currentColor;
     }
 }

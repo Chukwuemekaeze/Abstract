@@ -37,7 +37,7 @@ import { relativeTime } from '@/lib/relativeTime'
 export function RuntimeStatusBadge({ project }: { project: Project }) {
   if (project.runtime_status === 'running') {
     return (
-      <Badge className="bg-green-600 text-white">
+      <Badge variant="success">
         Running
         {project.started_at && (
           <span className="ml-1 font-normal opacity-80">
@@ -48,9 +48,9 @@ export function RuntimeStatusBadge({ project }: { project: Project }) {
     )
   }
   if (project.runtime_status === 'failed') {
-    return <Badge className="bg-red-600 text-white">Failed to start</Badge>
+    return <Badge variant="danger">Failed to start</Badge>
   }
-  return <Badge variant="outline">Not started</Badge>
+  return <Badge variant="neutral">Not started</Badge>
 }
 
 export function RuntimeControls({ project }: { project: Project }) {
