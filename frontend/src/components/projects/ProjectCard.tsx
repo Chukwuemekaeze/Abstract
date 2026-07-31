@@ -52,7 +52,7 @@ const OPERATION_LABEL: Record<string, string> = {
 function TrafficBadge({ project }: { project: Project }) {
   if (project.domain) {
     return (
-      <Badge className="bg-blue-600 text-white">
+      <Badge variant="cyan">
         <Globe className="mr-1 size-3" />
         <a
           href={`https://${project.domain}`}
@@ -65,7 +65,7 @@ function TrafficBadge({ project }: { project: Project }) {
       </Badge>
     )
   }
-  return <Badge variant="outline">Unpublished</Badge>
+  return <Badge variant="neutral">Unpublished</Badge>
 }
 
 export function ProjectCard({

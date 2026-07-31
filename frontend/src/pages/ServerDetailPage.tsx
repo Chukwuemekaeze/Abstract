@@ -52,10 +52,13 @@ import { useReregisterDialogStore } from '@/store/reregisterDialogStore'
 // Mirrors the backend Linux-username validation (schemas/servers.py).
 const USERNAME_PATTERN = /^[a-z_][a-z0-9_-]*$/
 
-const STATUS_META: Record<ServerStatus, { label: string; className: string }> = {
-  verified: { label: 'verified', className: 'bg-green-600 text-white' },
-  pending_verification: { label: 'pending', className: 'bg-yellow-500 text-black' },
-  key_mismatch: { label: 'key mismatch', className: 'bg-red-600 text-white' },
+const STATUS_META: Record<
+  ServerStatus,
+  { label: string; variant: 'success' | 'pending' | 'danger' }
+> = {
+  verified: { label: 'verified', variant: 'success' },
+  pending_verification: { label: 'pending', variant: 'pending' },
+  key_mismatch: { label: 'key mismatch', variant: 'danger' },
 }
 
 const REBOOT_TIMEOUT_MS = 5 * 60 * 1000
@@ -114,7 +117,7 @@ function PendingServerDetail({ server }: { server: Server }) {
       <div>
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl">{server.name}</h1>
-          <Badge className={status.className}>{status.label}</Badge>
+          <Badge variant={status.variant}>{status.label}</Badge>
         </div>
         <p className="text-muted-foreground text-sm">
           {server.username}@{server.host}:{server.port}
@@ -175,7 +178,7 @@ function KeyMismatchServerDetail({ server }: { server: Server }) {
       <div>
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl">{server.name}</h1>
-          <Badge className={status.className}>{status.label}</Badge>
+          <Badge variant={status.variant}>{status.label}</Badge>
         </div>
         <p className="text-muted-foreground text-sm">
           {server.username}@{server.host}:{server.port}
@@ -373,7 +376,7 @@ function ServerDetail({ server }: { server: Server }) {
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl">{server.name}</h1>
           <div className="flex items-center gap-2">
-            <Badge className={status.className}>{status.label}</Badge>
+            <Badge variant={status.variant}>{status.label}</Badge>
             <Button
               size="sm"
               variant="destructive"

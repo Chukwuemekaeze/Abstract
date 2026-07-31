@@ -1,5 +1,5 @@
 // The projects table: one selectable row per project across all servers. Each
-// row shows identity, where it runs (server + domain), and a derived state.
+// row shows the project name, the server it runs on, and a derived status.
 //
 // The COMMIT column from the mockup is intentionally omitted: the list endpoint
 // carries no commit sha (it lives on ProjectRun), and it is already shown in the
@@ -47,8 +47,8 @@ export function ProjectsTable({
     <div>
       <div className="grid grid-cols-[2fr_1.6fr_0.8fr] gap-4 border-b border-border px-4 pb-2 text-xs font-semibold uppercase tracking-[0.06em] text-text-dim">
         <span>Project</span>
-        <span>Server / Domain</span>
-        <span>State</span>
+        <span>Server</span>
+        <span>Status</span>
       </div>
 
       {projects.map((project) => {
@@ -69,21 +69,11 @@ export function ProjectsTable({
               <div className="truncate font-medium text-foreground">
                 {project.name}
               </div>
-              <div className="truncate font-mono text-xs text-text-dim">
-                {project.github_repo_full_name}
-              </div>
             </div>
             <div className="min-w-0 text-sm">
               <div className="truncate text-text-dim">
                 {project.server_name ?? 'unknown server'}
               </div>
-              {project.domain ? (
-                <div className="truncate text-xs text-text-dim">
-                  {project.domain}
-                </div>
-              ) : (
-                <div className="text-xs text-text-dim/60">no domain</div>
-              )}
             </div>
             <StateCell project={project} />
           </button>

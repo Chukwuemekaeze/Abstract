@@ -33,12 +33,12 @@ function formatDuration(startedAt: string, finishedAt: string): string {
 
 function RunStatusBadge({ status }: { status: ProjectRun['status'] }) {
   if (status === 'running') {
-    return <Badge className="bg-green-600 text-white">Current</Badge>
+    return <Badge variant="success">Current</Badge>
   }
   if (status === 'failed') {
-    return <Badge className="bg-red-600 text-white">Failed</Badge>
+    return <Badge variant="danger">Failed</Badge>
   }
-  return <Badge variant="outline">Superseded</Badge>
+  return <Badge variant="neutral">Superseded</Badge>
 }
 
 function RunRow({
