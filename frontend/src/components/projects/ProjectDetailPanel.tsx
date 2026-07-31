@@ -1,9 +1,12 @@
-// The right-hand detail panel for the selected project. It is a thin composition
-// layer over existing building blocks: RuntimeControls (Start/Restart, Pull),
-// the PublishDialog, EnvFilesSection, and VersionHistorySection. The status line
-// summarises runtime_status / active_operation in plain language.
+// The right-hand detail panel for the selected project. It renders as a fixed,
+// full-viewport-height drawer that slides in when a project is selected and
+// collapses when the user clicks anywhere else in the viewport. The body is a
+// thin composition layer over existing building blocks: RuntimeControls
+// (Start/Restart, Pull), the PublishDialog, EnvFilesSection, and
+// VersionHistorySection. The status line summarises runtime_status /
+// active_operation in plain language.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader2, Rocket } from 'lucide-react'
 
 import { type Project } from '@/api/projects'
@@ -12,6 +15,7 @@ import { PublishDialog } from '@/components/projects/PublishDialog'
 import { RuntimeControls } from '@/components/projects/RuntimeControls'
 import { VersionHistorySection } from '@/components/projects/VersionHistorySection'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { relativeTime } from '@/lib/relativeTime'
 
 function StatusLine({ project }: { project: Project }) {
@@ -51,11 +55,67 @@ function StatusLine({ project }: { project: Project }) {
   return <span className="text-text-dim">Not started{on}</span>
 }
 
-export function ProjectDetailPanel({ project }: { project: Project }) {
+export function ProjectDetailPanel({
+  project,
+  onClose,
+}: {
+  project: Project | null
+  onClose: () => void
+}) {
+  const panelRef = useRef<HTMLElement>(null)
+
+  // Keep showing the last project while the drawer animates closed, so the body
+  // doesn't blank out mid-slide. Only advances when a project is present.
+  const [displayed, setDisplayed] = useState<Project | null>(project)
+  useEffect(() => {
+    if (project) setDisplayed(project)
+  }, [project])
+
+  const open = project != null
+
+  // Collapse when the user clicks anywhere outside the drawer. Clicks on a
+  // project row switch the selection (handled by the table), and clicks inside a
+  // Radix dialog (e.g. Publish) must not dismiss the drawer underneath them.
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(event: MouseEvent) {
+      const target = event.target as HTMLElement
+      if (
+        panelRef.current?.contains(target) ||
+        target.closest('[data-project-row]') ||
+        target.closest('[role="dialog"]')
+      ) {
+        return
+      }
+      onClose()
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [open, onClose])
+
+  return (
+    <aside
+      ref={panelRef}
+      className={cn(
+        'fixed top-3 right-3 bottom-3 z-40 flex w-[28rem] flex-col gap-6 overflow-y-auto rounded-md border border-cyan/30 bg-surface p-6 shadow-2xl transition-transform duration-300 ease-out',
+        open
+          ? 'translate-x-0'
+          : 'pointer-events-none translate-x-[calc(100%+1rem)]',
+      )}
+      aria-hidden={!open}
+    >
+      {displayed && (
+        <ProjectDetailContent key={displayed.id} project={displayed} />
+      )}
+    </aside>
+  )
+}
+
+function ProjectDetailContent({ project }: { project: Project }) {
   const [publishOpen, setPublishOpen] = useState(false)
 
   return (
-    <div className="flex h-full flex-col gap-6 overflow-y-auto border-l border-border p-6">
+    <>
       <div>
         <h2 className="text-xl">{project.name}</h2>
         <p className="mt-1 text-sm">
@@ -106,6 +166,6 @@ export function ProjectDetailPanel({ project }: { project: Project }) {
         open={publishOpen}
         onOpenChange={setPublishOpen}
       />
-    </div>
+    </>
   )
 }

@@ -33,9 +33,10 @@ export function AppShell() {
     )
 
   return (
-    <div className="flex h-screen w-full overflow-hidden">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface">
-        <div className="px-5 py-5">
+    <div className="flex h-screen w-full overflow-hidden pb-0.5">
+      <aside className="flex w-60 shrink-0 flex-col">
+        {/* Brand + primary nav: one bordered panel, grows to fill the column. */}
+        <div className="flex flex-1 flex-col gap-3 border-2 border-cyan/30 bg-surface px-3 py-4">
           <NavLink to="/" aria-label="Abstract home">
             <img
               src="/brand/abstract-lockup-glow.svg"
@@ -46,18 +47,19 @@ export function AppShell() {
               className="h-[3.57rem] w-auto"
             />
           </NavLink>
+
+          <nav className="flex flex-col gap-1">
+            {navItems.map(({ to, label, icon: Icon, end }) => (
+              <NavLink key={to} to={to} end={end} className={navLinkClass}>
+                <Icon className="size-4" />
+                {label}
+              </NavLink>
+            ))}
+          </nav>
         </div>
 
-        <nav className="flex flex-col gap-1 px-3">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end} className={navLinkClass}>
-              <Icon className="size-4" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="mt-auto flex items-center gap-3 border-t border-border px-4 py-3">
+        {/* Signed-in user: its own bordered panel, sharing the edge above. */}
+        <div className="-mt-0.5 flex items-center gap-3 border-2 border-cyan/30 bg-surface px-3 py-3">
           <UserButton appearance={clerkAppearance}>
             <UserButton.MenuItems>
               <UserButton.Action
@@ -75,7 +77,8 @@ export function AppShell() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
+      {/* Main content: the whole pane is one bordered panel, sharing the sidebar edge. */}
+      <main className="-ml-0.5 flex-1 overflow-y-auto border-2 border-cyan/30 bg-surface">
         <Outlet />
       </main>
 

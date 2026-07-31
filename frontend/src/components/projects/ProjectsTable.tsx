@@ -57,6 +57,7 @@ export function ProjectsTable({
           <button
             key={project.id}
             type="button"
+            data-project-row
             onClick={() => onSelect(project.id)}
             className={cn(
               'grid w-full grid-cols-[2fr_1.6fr_0.8fr] items-center gap-4 border-b border-l-2 border-border px-4 py-4 text-left transition-colors',
