@@ -2,6 +2,7 @@ import { act } from 'react'
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { AxiosError } from 'axios'
 
 // Mock the axios client so the mutations never hit the network. extractErrorMessage
 // is kept as a simple passthrough to the fallback.
@@ -103,6 +104,38 @@ describe('AddServerDialog', () => {
     expect(post.mock.calls.every(([url]) => !String(url).includes('/cancel'))).toBe(
       true,
     )
+  })
+
+  it('surfaces the structured auth error message when the root password is wrong', async () => {
+    const user = userEvent.setup()
+    // install_key returns a structured 400 { code, message } for a rejected password.
+    const err = new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST')
+    err.response = {
+      data: {
+        detail: {
+          code: 'AUTH_FAILED',
+          message:
+            'That password did not work. Double-check the root password for this server and try again.',
+          retryable: false,
+        },
+      },
+    } as never
+    post.mockRejectedValueOnce(err)
+
+    renderWithProviders(<AddServerDialog />)
+    resumeIntoConfirmation()
+
+    await user.type(screen.getByLabelText('Password'), 'wrongpass')
+    await user.click(
+      screen.getByRole('button', { name: /fingerprint matches, install key/i }),
+    )
+
+    // The plain-language message is shown, not the generic "status code 400".
+    expect(
+      await screen.findByText(/That password did not work/),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/status code 400/)).not.toBeInTheDocument()
+    expect(useAddServerStore.getState().step).toBe('failed')
   })
 
   it('installs in a single call without collecting a new password (forced changes are handled server-side)', async () => {

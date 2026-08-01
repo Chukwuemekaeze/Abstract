@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 
 import { extractErrorMessage } from '@/api/client'
 import {
+  extractReregistrationError,
   useInstallKeyMutation,
   useProbeServerMutation,
 } from '@/api/servers'
@@ -99,7 +100,11 @@ export function AddServerDialog() {
       setStep('done')
       toast.success('Server verified and key installed.')
     } catch (err) {
-      setError(extractErrorMessage(err, 'Key installation failed.'))
+      // install_key returns a structured { code, message, retryable } detail for
+      // password/forced-change failures (e.g. AUTH_FAILED, a wrong root password → 400),
+      // so surface that plain-language message. Falls back to the generic extractor for
+      // plain-string details (guardrail 400s, 502s).
+      setError(extractReregistrationError(err, 'Key installation failed.').message)
       setStep('failed')
     }
   }
