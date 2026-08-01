@@ -33,10 +33,12 @@ export function AppShell() {
     )
 
   return (
-    <div className="flex h-screen w-full overflow-hidden pb-0.5">
+    <div className="flex h-screen w-full overflow-hidden pb-[3px]">
       <aside className="flex w-60 shrink-0 flex-col">
-        {/* Brand + primary nav: one bordered panel, grows to fill the column. */}
-        <div className="flex flex-1 flex-col gap-3 border-2 border-cyan/30 bg-surface px-3 py-4">
+        {/* Brand + primary nav: one bordered panel, grows to fill the column. The
+            panels stay translucent so the app-wide cyan glow (set on <body>) shows
+            through their frames. */}
+        <div className="flex flex-1 flex-col gap-3 border-[3px] border-cyan/30 bg-surface/70 px-3 py-4">
           <NavLink to="/" aria-label="Abstract home">
             <img
               src="/brand/abstract-lockup-glow.svg"
@@ -59,7 +61,7 @@ export function AppShell() {
         </div>
 
         {/* Signed-in user: its own bordered panel, sharing the edge above. */}
-        <div className="-mt-0.5 flex items-center gap-3 border-2 border-cyan/30 bg-surface px-3 py-3">
+        <div className="-mt-[3px] flex items-center gap-3 border-[3px] border-cyan/30 bg-surface/70 px-3 py-3">
           <UserButton appearance={clerkAppearance}>
             <UserButton.MenuItems>
               <UserButton.Action
@@ -78,7 +80,7 @@ export function AppShell() {
       </aside>
 
       {/* Main content: the whole pane is one bordered panel, sharing the sidebar edge. */}
-      <main className="-ml-0.5 flex-1 overflow-y-auto border-2 border-cyan/30 bg-surface">
+      <main className="-ml-[3px] flex-1 overflow-y-auto border-[3px] border-cyan/30 bg-surface/70">
         <Outlet />
       </main>
 
