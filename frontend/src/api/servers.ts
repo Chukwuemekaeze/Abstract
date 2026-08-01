@@ -395,6 +395,10 @@ export interface ServerDeletionStepResult {
 export interface DeleteServerResponse {
   success: boolean
   steps: ServerDeletionStepResult[]
+  // A one-time root password, present only when Abstract had set this server's root
+  // password itself and the delete reset it to this fresh value. Shown once in the
+  // dialog for the user to copy; never persisted or returned again.
+  revealed_root_password?: string | null
 }
 
 // One project that a server deletion would destroy, for the confirm dialog.

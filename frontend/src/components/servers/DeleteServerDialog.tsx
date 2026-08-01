@@ -14,7 +14,7 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Check, Loader2, MinusCircle, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, KeyRound, Loader2, MinusCircle, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -36,6 +36,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useDeleteServerDialogStore } from '@/store/delete-server-dialog'
 
 // The four VPS teardown steps after the per-project loop, in run order. Sudoers
@@ -62,6 +63,7 @@ const STEP_LABELS: Record<string, string> = {
   connect_ssh: 'Connect to the server',
   revoke_sudoers: "Revoke Abstract's sudoers grant",
   restore_ssh_access: 'Restore password and root SSH login',
+  reset_root_password: 'Reset the root password',
   remove_authorized_key: "Remove Abstract's SSH key",
   evict_ssh_connection: 'Close the pooled SSH connection',
   delete_server_record: 'Delete the server record',
@@ -102,9 +104,25 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
 
   const [confirm, setConfirm] = useState('')
   const [failure, setFailure] = useState<Failure | null>(null)
+  // Set on a successful delete that reset a managed root password. Holds the one-time
+  // password (and the server name, snapshotted because the server query 404s once the
+  // row is gone) so the dialog stays open on the reveal panel instead of closing.
+  const [revealed, setRevealed] = useState<{ password: string; serverName: string } | null>(
+    null,
+  )
+  const [acknowledged, setAcknowledged] = useState(false)
 
   const pending = del.isPending
   const confirmed = server ? confirm === server.name : false
+  // While a one-time password is on screen and unacknowledged, the dialog must not be
+  // dismissable: closing would lose the only copy.
+  const lockedOnReveal = revealed !== null && !acknowledged
+
+  const finish = () => {
+    close()
+    // The server list lives at the app root.
+    navigate('/')
+  }
 
   const projects = preview.data
     ? [...preview.data.projects].sort(
@@ -115,33 +133,58 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
   const runDelete = async () => {
     setFailure(null)
     try {
-      await del.mutateAsync(recordsOnly ? { recordsOnly: true } : undefined)
+      const res = await del.mutateAsync(
+        recordsOnly ? { recordsOnly: true } : undefined,
+      )
+      // If Abstract reset a managed root password, hold the dialog open on the reveal
+      // panel so the user can copy it; do not navigate away until they acknowledge.
+      if (res.revealed_root_password) {
+        setRevealed({
+          password: res.revealed_root_password,
+          serverName: server?.name ?? '',
+        })
+        return
+      }
       toast.success(recordsOnly ? 'Server record removed.' : 'Server deleted.')
-      close()
-      // The server list lives at the app root.
-      navigate('/')
+      finish()
     } catch (err) {
       setFailure(extractServerDeletionError(err))
     }
   }
 
   return (
-    <Dialog open onOpenChange={(v) => !pending && !v && close()}>
-      <DialogContent showCloseButton={!pending} className="max-w-lg">
+    <Dialog
+      open
+      onOpenChange={(v) => !pending && !lockedOnReveal && !v && close()}
+    >
+      <DialogContent
+        showCloseButton={!pending && !lockedOnReveal}
+        className="max-w-lg"
+      >
         <DialogHeader>
           <DialogTitle>
-            {recordsOnly
-              ? `Remove Abstract's record of ${server?.name ?? ''}?`
-              : `Delete server ${server?.name ?? ''}?`}
+            {revealed
+              ? `Server ${revealed.serverName} deleted`
+              : recordsOnly
+                ? `Remove Abstract's record of ${server?.name ?? ''}?`
+                : `Delete server ${server?.name ?? ''}?`}
           </DialogTitle>
           <DialogDescription>
-            {recordsOnly
-              ? "This deletes Abstract's record of this rebuilt server and its projects. The server itself is not touched. This cannot be undone."
-              : 'This tears down every project on this server, then removes Abstract from the VPS. This cannot be undone.'}
+            {revealed
+              ? 'Abstract had set this server’s root password. It has been reset to a new one — save it now, it will not be shown again.'
+              : recordsOnly
+                ? "This deletes Abstract's record of this rebuilt server and its projects. The server itself is not touched. This cannot be undone."
+                : 'This tears down every project on this server, then removes Abstract from the VPS. This cannot be undone.'}
           </DialogDescription>
         </DialogHeader>
 
-        {failure ? (
+        {revealed ? (
+          <RevealView
+            password={revealed.password}
+            acknowledged={acknowledged}
+            onAcknowledgedChange={setAcknowledged}
+          />
+        ) : failure ? (
           <FailureView failure={failure} />
         ) : pending ? (
           <ProgressView projects={projects} recordsOnly={recordsOnly} />
@@ -179,9 +222,10 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
                   <li>Abstract's SSH key will be removed from the server.</li>
                   <li>
                     Password login and root SSH login will be re-enabled so you can log
-                    back in. You will need your root password from your VPS provider. If
-                    you have lost it, most providers let you reset it from their control
-                    panel.
+                    back in. If Abstract set this server's root password itself, it will
+                    reset it and show you the new one here after deletion — otherwise use
+                    your own root password (most providers let you reset it from their
+                    control panel if you have lost it).
                   </li>
                   <li>
                     Docker, nginx, the firewall, the swap file, and the sudo user
@@ -210,30 +254,98 @@ function DeleteDialogOpen({ serverId }: { serverId: string }) {
         )}
 
         <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => close()}
-            disabled={pending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={runDelete}
-            disabled={pending || (!failure && !confirmed)}
-          >
-            {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
-            {failure
-              ? 'Retry deletion'
-              : recordsOnly
-                ? 'Remove server record'
-                : 'Delete server'}
-          </Button>
+          {revealed ? (
+            <Button
+              type="button"
+              onClick={finish}
+              disabled={!acknowledged}
+            >
+              Done
+            </Button>
+          ) : (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => close()}
+                disabled={pending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={runDelete}
+                disabled={pending || (!failure && !confirmed)}
+              >
+                {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
+                {failure
+                  ? 'Retry deletion'
+                  : recordsOnly
+                    ? 'Remove server record'
+                    : 'Delete server'}
+              </Button>
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// Shown once after a delete that reset a managed root password. The password is
+// displayed in a monospace copy box (same pattern as FingerprintConfirm) and the Done
+// button is gated on the acknowledgment checkbox, since the value is never recoverable.
+function RevealView({
+  password,
+  acknowledged,
+  onAcknowledgedChange,
+}: {
+  password: string
+  acknowledged: boolean
+  onAcknowledgedChange: (v: boolean) => void
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const copyPassword = async () => {
+    await navigator.clipboard.writeText(password)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
+        <Label className="flex items-center gap-2 text-sm">
+          <KeyRound className="size-4" /> New root password
+        </Label>
+        <div className="flex items-center gap-2 rounded-md border bg-muted p-3">
+          <code className="flex-1 break-all font-mono text-sm">{password}</code>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={copyPassword}
+            aria-label="Copy password"
+          >
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Log in with <span className="font-mono">root</span> and this password. It is
+          not stored anywhere and will not be shown again.
+        </p>
+      </div>
+
+      <Label className="flex items-center gap-2 text-sm font-normal">
+        <Checkbox
+          checked={acknowledged}
+          onCheckedChange={(v) => onAcknowledgedChange(v === true)}
+          aria-label="I have saved this password"
+        />
+        I&apos;ve saved this password
+      </Label>
+    </div>
   )
 }
 
