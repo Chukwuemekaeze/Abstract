@@ -184,6 +184,20 @@ def test_forced_change_client_records_offered_methods():
     assert client.password_offered is True
 
 
+def test_forced_change_client_declines_repeated_wrong_password():
+    # The plain password method offers the credential once; a retry is declined (None) so
+    # auth fails fast instead of looping the same rejected password to MaxAuthTries.
+    client = srv._ForcedChangeClient("wrong", "gen")
+    assert client.password_auth_requested() == "wrong"
+    assert client.password_auth_requested() is None
+
+    # Same for a re-prompted "current" password over keyboard-interactive, as long as no
+    # change was ever requested.
+    fresh = srv._ForcedChangeClient("wrong", "gen")
+    assert fresh.kbdint_challenge_received("", "", "", [("Password:", False)]) == ["wrong"]
+    assert fresh.kbdint_challenge_received("", "", "", [("Password:", False)]) is None
+
+
 def test_generate_bootstrap_password_meets_complexity():
     for _ in range(20):
         pw = srv.generate_bootstrap_password()
@@ -271,6 +285,46 @@ async def test_auth_failed_when_password_offered_but_rejected(mocker):
     with pytest.raises(srv.ReregistrationError) as exc:
         await srv._open_access(_target(), "wrongpass", "genpass")
     assert exc.value.code == "AUTH_FAILED"
+
+
+async def test_connection_lost_after_password_offered_is_auth_failed(mocker):
+    # sshd closing the session after repeated auth failures (no change ever prompted) is a
+    # rejected credential, not an unreachable host: AUTH_FAILED (400), not the old 503.
+    def connect(**kwargs):
+        client = kwargs["client_factory"]()
+        client.password_auth_requested()  # offered and tried, never accepted
+        raise srv.asyncssh.ConnectionLost("closed after repeated auth failures")
+
+    mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
+    with pytest.raises(srv.ReregistrationError) as exc:
+        await srv._open_access(_target(), "wrongpass", "genpass")
+    assert exc.value.code == "AUTH_FAILED"
+
+
+async def test_timeout_after_password_offered_is_auth_failed(mocker):
+    # A timeout once auth had begun (password method offered, no change) is the wrong
+    # password looping until the box gave up — an auth failure, not "unreachable".
+    def connect(**kwargs):
+        client = kwargs["client_factory"]()
+        client.password_auth_requested()
+        raise TimeoutError()
+
+    mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
+    with pytest.raises(srv.ReregistrationError) as exc:
+        await srv._open_access(_target(), "wrongpass", "genpass")
+    assert exc.value.code == "AUTH_FAILED"
+
+
+async def test_unreachable_without_password_offered_stays_network(mocker):
+    # A genuinely unreachable box never gets far enough to offer a password method, so it
+    # still maps to NETWORK_UNREACHABLE (retryable), not AUTH_FAILED.
+    def connect(**kwargs):
+        raise TimeoutError()
+
+    mocker.patch.object(srv.asyncssh, "connect", side_effect=connect)
+    with pytest.raises(srv.ReregistrationError) as exc:
+        await srv._open_access(_target(), "userpass", "genpass")
+    assert exc.value.code == "NETWORK_UNREACHABLE"
 
 
 async def test_disconnect_after_change_is_probable_success(mocker):

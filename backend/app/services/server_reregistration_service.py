@@ -194,9 +194,21 @@ class _ForcedChangeClient(asyncssh.SSHClient):
         self._generated = generated_password
         self.password_offered = False
         self.change_requested = False
+        # A wrong credential is otherwise re-offered on every retry until sshd's
+        # MaxAuthTries drops the connection (seconds of delay, then a misleading
+        # "unreachable" outcome). Track that each password-based method has had its one
+        # genuine attempt so a repeat request is declined and auth fails fast as a clean
+        # PermissionDenied instead of looping.
+        self._password_tried = False
+        self._current_answered = False
 
-    def password_auth_requested(self) -> str:
+    def password_auth_requested(self) -> str | None:
         self.password_offered = True
+        if self._password_tried:
+            # Already offered this password once; it was rejected. Decline further tries
+            # so auth fails fast rather than retrying to MaxAuthTries.
+            return None
+        self._password_tried = True
         return self._user
 
     def password_change_requested(self, prompt: str, lang: str) -> tuple[str, str]:
@@ -219,11 +231,17 @@ class _ForcedChangeClient(asyncssh.SSHClient):
         instructions: str,
         lang: str,
         prompts: list[tuple[str, bool]],
-    ) -> list[str]:
+    ) -> list[str] | None:
         responses: list[str] = []
         for prompt, _echo in prompts:
             kind = classify_prompt(prompt)
             if kind == "current":
+                if self._current_answered and not self.change_requested:
+                    # Re-asked for the current password with no change ever prompted: it
+                    # is wrong. Decline (abort this method) so auth fails fast rather than
+                    # looping the same rejected password to MaxAuthTries.
+                    return None
+                self._current_answered = True
                 responses.append(self._user)
             else:
                 self.change_requested = True
@@ -380,12 +398,22 @@ async def _open_access(
             raise _auth_failed() from exc
         raise _password_auth_unavailable() from exc
     except (asyncssh.ConnectionLost, ConnectionResetError) as exc:
-        # A drop right after answering the change is probable success; otherwise the box
-        # was not reachable enough to finish.
+        # A drop right after answering the change is a probable success.
         if client.change_requested:
             return AccessResult(generated_password, changed=True)
+        # Otherwise: if the server had offered a password method, we got far enough for the
+        # box to be reachable, so a drop with no change requested means the credential was
+        # rejected (e.g. sshd closed the session after repeated auth failures) — an auth
+        # failure, not an unreachable host.
+        if client.password_offered:
+            raise _auth_failed() from exc
         raise _network_unreachable() from exc
     except (OSError, asyncssh.Error) as exc:
+        # Same reasoning for a timeout or other transport error once auth had begun: a
+        # password method was offered and tried but never completed or drove a change, so
+        # treat it as a rejected credential rather than mislabeling it "unreachable" (503).
+        if client.password_offered and not client.change_requested:
+            raise _auth_failed() from exc
         raise _network_unreachable() from exc
 
     async with conn:
