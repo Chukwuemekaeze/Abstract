@@ -104,6 +104,14 @@ class Server(Base):
     bootstrap_password: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True
     )
+    # True when Abstract set the current root password itself, via a provider-forced
+    # password change during registration or re-registration. The box's root password
+    # is then a generated value the user does not know. Server deletion reads this to
+    # reset the root password to a fresh, revealed-once value before re-enabling
+    # password login, so the user is not locked out. Internal; never serialized.
+    root_password_is_managed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     # True once Abstract's public key has been written to the server's
     # authorized_keys during install_key. Set as soon as the append succeeds, even
     # if a later install sub-step (disable password auth, key-login verification)
