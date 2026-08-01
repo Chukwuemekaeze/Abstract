@@ -26,6 +26,7 @@ idempotent, so a retry after a partial failure lands cleanly.
 """
 
 import shlex
+from dataclasses import dataclass
 from uuid import UUID
 
 import asyncssh
@@ -46,18 +47,31 @@ from app.services.project_deletion_service import (
 )
 from app.services.server_reregistration_service import (
     evict_stale_ssh_state,
+    generate_bootstrap_password,
     purge_server_projects,
 )
 from app.services.sshd_config import SshdDirectiveResult, apply_sshd_directive
 from app.services.ssh_service import SSHService
 
 __all__ = [
+    "DeleteOutcome",
     "ServerDeletionError",
     "ServerOperationInFlight",
     "cancel_registration",
     "delete_server",
     "purge_server_record",
 ]
+
+
+@dataclass
+class DeleteOutcome:
+    """The result of a full server deletion: the ordered step list, plus a one-time
+    root password when Abstract had set (and just reset) it. revealed_root_password is
+    non-None only for a managed-password server; it is never persisted, existing only in
+    this return value for the route to hand back to the user once."""
+
+    steps: list["ServerDeletionStepResult"]
+    revealed_root_password: str | None = None
 
 _TIMEOUT_CHECK = 30
 
@@ -235,10 +249,11 @@ async def delete_server(
     key_provider: KeyProvider,
     clerk: Clerk,
     github: GithubService,
-) -> list[ServerDeletionStepResult]:
-    """Run the ordered teardown. Returns the step list on success; raises
-    ServerDeletionError (row intact, locks cleared) on any failure, or
-    ServerOperationInFlight (nothing touched) if a project is already busy."""
+) -> DeleteOutcome:
+    """Run the ordered teardown. Returns a DeleteOutcome (step list plus a one-time root
+    password when Abstract had set it) on success; raises ServerDeletionError (row
+    intact, locks cleared) on any failure, or ServerOperationInFlight (nothing touched)
+    if a project is already busy."""
     server_id = server.id
 
     # -- Commit A: acquire the server + project locks ------------------------
@@ -256,6 +271,7 @@ async def delete_server(
     assert server is not None  # the lock we just committed holds the row in place
 
     steps: list[ServerDeletionStepResult] = []
+    revealed_root_password: str | None = None
     try:
         # -- 1. per-project teardown -----------------------------------------
         for project in _order_projects(list(server.projects)):
@@ -357,6 +373,30 @@ async def delete_server(
             ServerDeletionStepResult(name="restore_ssh_access", status="completed")
         )
 
+        # -- 2b. reset_root_password -----------------------------------------
+        # When Abstract set the root password itself (a provider-forced change during
+        # registration), the user does not know it, and we just re-enabled password login
+        # above — which would hand back a box they cannot log into. Reset root's password
+        # to a fresh value and return it once so the user can save it; nothing is
+        # persisted. Targets root explicitly (username may be the sudo user) and runs
+        # while the sudo grant still holds (revoke_sudoers is later). chpasswd reads the
+        # credential from stdin so it never lands in the box's process list. Only runs for
+        # a managed-password server; a server the user logs into with their own password
+        # is left untouched.
+        if server.root_password_is_managed:
+            revealed_root_password = generate_bootstrap_password()
+            reset_script = (
+                f"printf %s {shlex.quote(f'root:{revealed_root_password}')} | chpasswd"
+            )
+            await _run_step(
+                conn,
+                "reset_root_password",
+                f"{_priv(server)}sh -c {shlex.quote(reset_script)}",
+            )
+            steps.append(
+                ServerDeletionStepResult(name="reset_root_password", status="completed")
+            )
+
         # -- 3. remove_authorized_key ----------------------------------------
         # Runs as the connected user (no sudo), so it is independent of the sudo
         # grant. After this runs, Abstract can no longer SSH in with this key.
@@ -449,7 +489,7 @@ async def delete_server(
             message=f"Deletion failed at step '{exc.step}'.",
         ) from exc
 
-    return steps
+    return DeleteOutcome(steps=steps, revealed_root_password=revealed_root_password)
 
 
 async def cancel_registration(

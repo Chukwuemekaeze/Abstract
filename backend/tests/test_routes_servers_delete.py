@@ -272,6 +272,56 @@ async def test_ssh_pool_evicted_once(client, del_srv_env, db_session, test_user)
     del_srv_env.ssh.evict_connection.assert_called_once_with(test_user.id, server.id)
 
 
+# -- managed root password: reset + reveal once ------------------------------
+
+
+async def test_delete_managed_password_resets_and_reveals(
+    client, del_srv_env, db_session, test_user
+):
+    # Abstract set this server's root password itself (forced change). On delete it must
+    # reset root's password to a fresh value and hand it back exactly once.
+    server = await make_server(db_session, test_user.id)
+    server.root_password_is_managed = True
+    await db_session.commit()
+    await _seed_app_key(db_session, server)
+
+    resp = await client.delete(f"/api/servers/{server.id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    revealed = body["revealed_root_password"]
+    assert isinstance(revealed, str) and len(revealed) >= 16
+
+    steps = _steps_by_name(body)
+    assert steps["reset_root_password"]["status"] == "completed"
+    # It runs before the key is stripped, and password auth is restored first.
+    order = [s["name"] for s in body["steps"]]
+    assert order.index("restore_ssh_access") < order.index("reset_root_password")
+    assert order.index("reset_root_password") < order.index("remove_authorized_key")
+
+    # The exact revealed password was chpasswd'd onto root over the box.
+    commands = ran_commands(del_srv_env.get_conn())
+    assert any("chpasswd" in c and f"root:{revealed}" in c for c in commands)
+
+    assert await db_session.get(Server, server.id) is None
+
+
+async def test_delete_unmanaged_password_does_not_reset(
+    client, del_srv_env, db_session, test_user
+):
+    # A server the user logs into with their own password (the default) is left alone:
+    # no reset step, no revealed password, no chpasswd on the box.
+    server = await make_server(db_session, test_user.id)
+    await _seed_app_key(db_session, server)
+
+    body = (await client.delete(f"/api/servers/{server.id}")).json()
+
+    assert body["revealed_root_password"] is None
+    assert "reset_root_password" not in _steps_by_name(body)
+    commands = ran_commands(del_srv_env.get_conn())
+    assert not any("chpasswd" in c for c in commands)
+
+
 # -- skipped / edge steps ----------------------------------------------------
 
 

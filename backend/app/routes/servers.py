@@ -231,29 +231,34 @@ async def install_key(
 
     try:
         # Resume preflight: a bootstrap password persisted by a prior attempt still logs
-        # in, so its forced change already took. Reuse it and skip the exchange.
+        # in, so its forced change already took. Reuse it and skip the exchange. That the
+        # generated bootstrap password works means Abstract owns the root password.
         working_password: str | None = None
+        password_is_managed = False
         if server.bootstrap_password is not None:
             previous = (
                 await key_provider.decrypt(server.bootstrap_password)
             ).decode("utf-8")
             if await verify_password_for_resume(target, previous):
                 working_password = previous
+                password_is_managed = True
 
         if working_password is None:
             # Write-ahead: generate and persist the replacement password BEFORE the
             # exchange, so a forced change that lands mid-crash never orphans the box.
             # run_exchange_and_verify returns the user's password on a clean login, or the
-            # generated one after a forced change.
+            # generated one after a forced change (changed=True: Abstract now owns it).
             generated = generate_bootstrap_password()
             server.bootstrap_password = await key_provider.encrypt(
                 generated.encode("utf-8")
             )
             await db.commit()
 
-            working_password = await run_exchange_and_verify(
+            access = await run_exchange_and_verify(
                 target, password_from_client, generated
             )
+            working_password = access.working_password
+            password_is_managed = access.changed
 
         await ssh.install_key(
             server=server,
@@ -286,6 +291,7 @@ async def install_key(
     server.verified_at = datetime.now(timezone.utc)
     server.key_installed = True
     server.password_auth_disabled = disable_password_auth_from_client
+    server.root_password_is_managed = password_is_managed
     server.bootstrap_password = None
     await db.commit()
     await db.refresh(server)
@@ -430,13 +436,15 @@ async def reregister_complete(
                 resume_installed_key = True
 
         # (b) A bootstrap password from a prior attempt still works: that forced change
-        # took, so reuse it as the working password.
+        # took, so reuse it as the working password. It being generated means Abstract
+        # owns the root password.
         if not resume_installed_key and server.bootstrap_password is not None:
             previous = (
                 await key_provider.decrypt(server.bootstrap_password)
             ).decode("utf-8")
             if await verify_password_for_resume(target, previous):
                 working_password = previous
+                server.root_password_is_managed = True
 
         if not resume_installed_key and working_password is None:
             # Write-ahead: generate and persist the replacement password BEFORE the
@@ -448,9 +456,14 @@ async def reregister_complete(
             )
             await db.commit()
 
-            working_password = await run_exchange_and_verify(
+            access = await run_exchange_and_verify(
                 target, password_from_client, generated
             )
+            working_password = access.working_password
+            # Persist whether Abstract now owns the root password here, not at promotion,
+            # so the resume_installed_key path (a) on a later retry still sees the fact
+            # even though this attempt may crash before promoting.
+            server.root_password_is_managed = access.changed
             server.reregistration_state = "verifying"
             await db.commit()
 
@@ -736,6 +749,7 @@ async def delete_server_route(
         raise HTTPException(
             409, {"active_operation": server.active_operation}
         )
+    revealed_root_password: str | None = None
     try:
         if records_only:
             if server.status != "key_mismatch":
@@ -748,6 +762,7 @@ async def delete_server_route(
                         )
                     },
                 )
+            # A rebuilt box was wiped; there is no live root password to reset or reveal.
             steps = await purge_server_record(
                 server=server,
                 current_user=current_user,
@@ -759,7 +774,7 @@ async def delete_server_route(
                 github=github,
             )
         else:
-            steps = await delete_server(
+            outcome = await delete_server(
                 server=server,
                 current_user=current_user,
                 session_id=session_id,
@@ -770,6 +785,8 @@ async def delete_server_route(
                 clerk=clerk,
                 github=github,
             )
+            steps = outcome.steps
+            revealed_root_password = outcome.revealed_root_password
     except ServerOperationInFlight as exc:
         raise HTTPException(409, exc.detail) from exc
     except ServerDeletionError as exc:
@@ -786,4 +803,6 @@ async def delete_server_route(
             },
         ) from exc
 
-    return DeleteServerResponse(success=True, steps=steps)
+    return DeleteServerResponse(
+        success=True, steps=steps, revealed_root_password=revealed_root_password
+    )

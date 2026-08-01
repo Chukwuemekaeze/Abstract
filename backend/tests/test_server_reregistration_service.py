@@ -301,7 +301,8 @@ async def test_run_exchange_retries_when_change_did_not_take(mocker):
         srv, "_verify_password", mocker.AsyncMock(side_effect=[False, True, True])
     )
     result = await srv.run_exchange_and_verify(_target(), "userpass", "genpass")
-    assert result == "genpass"
+    assert result.working_password == "genpass"
+    assert result.changed is True
     assert verify.await_count == 3
 
 
@@ -329,7 +330,8 @@ async def test_run_exchange_branch_a_verifies_user_password(mocker):
         srv, "_verify_password", mocker.AsyncMock(return_value=True)
     )
     result = await srv.run_exchange_and_verify(_target(), "userpass", "genpass")
-    assert result == "userpass"
+    assert result.working_password == "userpass"
+    assert result.changed is False
 
 
 # --- host key recheck and resume -------------------------------------------

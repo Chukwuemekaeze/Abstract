@@ -108,6 +108,10 @@ class ServerDeletionStepResult(BaseModel):
 class DeleteServerResponse(BaseModel):
     success: bool
     steps: list[ServerDeletionStepResult]
+    # A one-time root password, present only when Abstract had set this server's root
+    # password itself and the delete reset it to this fresh value. The user must copy it
+    # before closing; it is never stored, so it is only ever returned here, once.
+    revealed_root_password: str | None = None
 
 
 class ServerDeletionPreviewProject(BaseModel):

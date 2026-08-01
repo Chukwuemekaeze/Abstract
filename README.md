@@ -148,7 +148,10 @@ port 8000, so there is no CORS configuration to worry about during development.
    password authentication, and verifies key based login works. If the server forces a
    password change on first login (some providers ship a pre-expired root password),
    Abstract completes that change automatically, generating and setting a fresh root
-   password itself — you are never asked to supply a new one.
+   password itself — you are never asked to supply a new one. Because that password is
+   Abstract's and not yours, deleting the server (which re-enables password login)
+   resets root to a new password and shows it to you once, to copy, in the delete
+   dialog — so you are never handed back a box whose password nobody holds.
 7. On the verified server card, click "Run smoke test". You should see the output of
    `echo 'hello from Abstract' && uname -a && date`, proving the pooled
    key based SSH connection works end to end.

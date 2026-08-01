@@ -16,7 +16,10 @@ from app.deps.services import get_github_service
 from app.main import app
 from app.models import AppSshKey, Project, ProjectDeployKey, Server
 from app.services.key_provider import EnvKeyProvider
-from app.services.server_reregistration_service import ReregistrationError
+from app.services.server_reregistration_service import (
+    AccessResult,
+    ReregistrationError,
+)
 
 from tests.conftest import requires_db
 
@@ -106,9 +109,12 @@ async def _seed_server(
     return server
 
 
-def _stub_engine(mocker, *, resume_pending=False, resume_bootstrap=False):
+def _stub_engine(
+    mocker, *, resume_pending=False, resume_bootstrap=False, changed=True
+):
     """Stub the SSH-touching engine calls the route makes, leaving the DB-staging ones
-    (regenerate_pending_keypair, purge_server_projects) real."""
+    (regenerate_pending_keypair, purge_server_projects) real. changed controls whether the
+    exchange reports Abstract had to set the password (branch B) or a clean login."""
     mocker.patch(
         "app.routes.servers.try_resume_with_pending_key",
         mocker.AsyncMock(return_value=resume_pending),
@@ -117,9 +123,10 @@ def _stub_engine(mocker, *, resume_pending=False, resume_bootstrap=False):
         "app.routes.servers.verify_password_for_resume",
         mocker.AsyncMock(return_value=resume_bootstrap),
     )
+    working = "genpass" if changed else "provider"
     run = mocker.patch(
         "app.routes.servers.run_exchange_and_verify",
-        mocker.AsyncMock(return_value="genpass"),
+        mocker.AsyncMock(return_value=AccessResult(working, changed=changed)),
     )
     mocker.patch("app.routes.servers.install_public_key", mocker.AsyncMock())
     mocker.patch(
@@ -194,6 +201,8 @@ async def test_complete_promotes_and_resets_to_verified_unhardened(
     assert server.host_key == PROBE_KEY
     assert server.pending_host_key is None
     assert server.bootstrap_password is None
+    # A rebuild's forced change means Abstract owns the new root password.
+    assert server.root_password_is_managed is True
     # Verified but unhardened, back to root.
     assert server.username == "root"
     assert server.sudo_user_name is None
@@ -216,6 +225,25 @@ async def test_complete_promotes_and_resets_to_verified_unhardened(
     assert len(projects) == 0
 
 
+async def test_complete_clean_login_does_not_mark_password_managed(
+    client, db_session, test_user, mock_ssh, mocker
+):
+    # If the provider password logged in cleanly (no forced change), the user still knows
+    # their password, so Abstract does not claim ownership of it.
+    server = await _seed_server(
+        db_session, test_user, pending_host_key=PROBE_KEY
+    )
+    _stub_engine(mocker, changed=False)
+
+    resp = await client.post(
+        f"/api/servers/{server.id}/reregister/complete", json={"password": "provider"}
+    )
+    assert resp.status_code == 200, resp.text
+
+    await db_session.refresh(server)
+    assert server.root_password_is_managed is False
+
+
 # --- write-ahead -----------------------------------------------------------
 
 
@@ -233,7 +261,7 @@ async def test_bootstrap_password_written_before_exchange(
         # mutates the same instance via the shared session) rather than the argument.
         captured["state"] = server.reregistration_state
         captured["bootstrap_set"] = server.bootstrap_password is not None
-        return generated
+        return AccessResult(generated, changed=True)
 
     mocker.patch("app.routes.servers.try_resume_with_pending_key", mocker.AsyncMock(return_value=False))
     mocker.patch("app.routes.servers.run_exchange_and_verify", side_effect=fake_exchange)

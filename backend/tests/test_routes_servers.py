@@ -9,7 +9,10 @@ from sqlalchemy import select
 
 from app.models import Server
 from app.services.key_provider import EnvKeyProvider
-from app.services.server_reregistration_service import ReregistrationError
+from app.services.server_reregistration_service import (
+    AccessResult,
+    ReregistrationError,
+)
 from app.services.ssh_service import KeyInstallVerificationFailed
 from tests.conftest import requires_db
 
@@ -30,7 +33,11 @@ def register_engine(mocker):
     )
     exchange = mocker.patch(
         "app.routes.servers.run_exchange_and_verify",
-        mocker.AsyncMock(side_effect=lambda target, user_pw, generated: user_pw),
+        mocker.AsyncMock(
+            side_effect=lambda target, user_pw, generated: AccessResult(
+                user_pw, changed=False
+            )
+        ),
     )
     return SimpleNamespace(verify_resume=verify_resume, exchange=exchange)
 
@@ -185,6 +192,8 @@ async def test_install_key_clean_login_verifies_and_clears_bootstrap(
     )
     assert row.key_installed is True
     assert row.bootstrap_password is None  # write-ahead cleared on success
+    # The user's own password logged in; Abstract does not own it.
+    assert row.root_password_is_managed is False
 
 
 async def test_install_key_forced_change_writes_ahead_then_clears(
@@ -200,7 +209,9 @@ async def test_install_key_forced_change_writes_ahead_then_clears(
     ).json()
 
     register_engine.exchange.side_effect = None
-    register_engine.exchange.return_value = "generated-boot-pw"
+    register_engine.exchange.return_value = AccessResult(
+        "generated-boot-pw", changed=True
+    )
 
     seen = {}
 
@@ -227,6 +238,8 @@ async def test_install_key_forced_change_writes_ahead_then_clears(
     )
     assert row.status == "verified"
     assert row.bootstrap_password is None  # cleared on success
+    # A forced change means Abstract set (and now owns) the root password.
+    assert row.root_password_is_managed is True
 
 
 async def test_install_key_resumes_via_bootstrap_password(
@@ -256,6 +269,11 @@ async def test_install_key_resumes_via_bootstrap_password(
     register_engine.exchange.assert_not_awaited()  # resumed, no new exchange
     _args, kwargs = mock_ssh.install_key.call_args
     assert kwargs["password_from_client"] == "resumed-pw"
+
+    # Resuming on a working bootstrap password means a prior forced change took, so
+    # Abstract owns the root password.
+    row = await db_session.scalar(select(Server).where(Server.id == probe["server_id"]))
+    assert row.root_password_is_managed is True
 
 
 @pytest.mark.parametrize(
@@ -301,7 +319,9 @@ async def test_install_key_forced_change_non_root_user(
         )
     ).json()
     register_engine.exchange.side_effect = None
-    register_engine.exchange.return_value = "generated-boot-pw"
+    register_engine.exchange.return_value = AccessResult(
+        "generated-boot-pw", changed=True
+    )
 
     resp = await client.post(
         f"/api/servers/{probe['server_id']}/install_key",

@@ -471,24 +471,27 @@ async def try_resume_with_pending_key(
 
 async def run_exchange_and_verify(
     target: AccessTarget, user_password: str, generated_password: str
-) -> str:
+) -> AccessResult:
     """Access engine steps 1 and 2. Open access, then verify (the only success signal).
     Up to 3 total attempts with a fresh connection each, bounded by the overall
-    deadline. Returns the working password. Raises the mapped error on failure."""
+    deadline. Returns the AccessResult: the working password plus whether Abstract had
+    to change it (changed=True means the returned password is the generated one, so the
+    caller now owns a root password the user does not know). Raises the mapped error on
+    failure."""
 
-    async def _attempt_loop() -> str:
+    async def _attempt_loop() -> AccessResult:
         last_error: ReregistrationError | None = None
         for _attempt in range(_MAX_EXCHANGE_ATTEMPTS):
             result = await _open_access(target, user_password, generated_password)
             if not result.changed:
                 # Branch A: the user password must still authenticate a fresh session.
                 if await _verify_password(target, user_password):
-                    return user_password
+                    return AccessResult(user_password, changed=False)
                 last_error = _locked_out()
                 continue
             # Branch B: the generated password is the new credential.
             if await _verify_password(target, generated_password):
-                return generated_password
+                return AccessResult(generated_password, changed=True)
             # It did not take. If the old password still works, retry the exchange;
             # if neither works, the account is locked out.
             if await _verify_password(target, user_password):
