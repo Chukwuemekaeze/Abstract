@@ -69,7 +69,7 @@ export function QuickHardenSection({
   const running = quickHarden.isPending
 
   return (
-    <div className="rounded-lg border bg-card p-5">
+    <div className="rounded-lg border-2 bg-card p-5">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-lg">Quick harden</h2>
