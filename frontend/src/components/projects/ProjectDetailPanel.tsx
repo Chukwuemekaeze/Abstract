@@ -97,7 +97,7 @@ export function ProjectDetailPanel({
     <aside
       ref={panelRef}
       className={cn(
-        // EXPERIMENT (projects-bg): translucent so the viewport gradient shows through the drawer.
+        // Translucent so the app-wide cyan glow (set on <body>) shows through the drawer.
         'fixed top-3 right-3 bottom-3 z-40 flex w-[28rem] flex-col gap-6 overflow-y-auto rounded-md border-[1.5px] border-cyan/30 bg-surface/90 p-6 shadow-2xl transition-transform duration-300 ease-out',
         open
           ? 'translate-x-0'

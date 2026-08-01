@@ -7,7 +7,7 @@
 // omitted. Account deletion lives in the Clerk user menu, as before.
 
 import { UserButton, useUser } from '@clerk/clerk-react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { FolderGit2, Server, Trash2 } from 'lucide-react'
 
 import { clerkAppearance } from '@/lib/clerkAppearance'
@@ -20,17 +20,9 @@ const navItems = [
   { to: '/projects', label: 'Projects', icon: FolderGit2, end: false },
 ]
 
-// EXPERIMENT (projects-bg): background gradient applied to the whole viewport on
-// the Projects route only. The framed panels go translucent so it shows through.
-const PROJECTS_BG =
-  'radial-gradient(1200px 600px at 20% 0%, rgba(6,182,212,0.24), rgba(6,182,212,0) 60%), ' +
-  'radial-gradient(1200px 600px at 80% 100%, rgba(6,182,212,0.24), rgba(6,182,212,0) 60%)'
-
 export function AppShell() {
   const { user } = useUser()
   const openDeleteAccount = useDeleteAccountDialogStore((s) => s.openDialog)
-  const isProjects = useLocation().pathname.startsWith('/projects')
-  const panelBg = isProjects ? 'bg-surface/70' : 'bg-surface'
 
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -41,18 +33,12 @@ export function AppShell() {
     )
 
   return (
-    <div
-      className="flex h-screen w-full overflow-hidden pb-[3px]"
-      style={isProjects ? { background: PROJECTS_BG } : undefined}
-    >
+    <div className="flex h-screen w-full overflow-hidden pb-[3px]">
       <aside className="flex w-60 shrink-0 flex-col">
-        {/* Brand + primary nav: one bordered panel, grows to fill the column. */}
-        <div
-          className={cn(
-            'flex flex-1 flex-col gap-3 border-[3px] border-cyan/30 px-3 py-4',
-            panelBg,
-          )}
-        >
+        {/* Brand + primary nav: one bordered panel, grows to fill the column. The
+            panels stay translucent so the app-wide cyan glow (set on <body>) shows
+            through their frames. */}
+        <div className="flex flex-1 flex-col gap-3 border-[3px] border-cyan/30 bg-surface/70 px-3 py-4">
           <NavLink to="/" aria-label="Abstract home">
             <img
               src="/brand/abstract-lockup-glow.svg"
@@ -75,12 +61,7 @@ export function AppShell() {
         </div>
 
         {/* Signed-in user: its own bordered panel, sharing the edge above. */}
-        <div
-          className={cn(
-            '-mt-[3px] flex items-center gap-3 border-[3px] border-cyan/30 px-3 py-3',
-            panelBg,
-          )}
-        >
+        <div className="-mt-[3px] flex items-center gap-3 border-[3px] border-cyan/30 bg-surface/70 px-3 py-3">
           <UserButton appearance={clerkAppearance}>
             <UserButton.MenuItems>
               <UserButton.Action
@@ -99,12 +80,7 @@ export function AppShell() {
       </aside>
 
       {/* Main content: the whole pane is one bordered panel, sharing the sidebar edge. */}
-      <main
-        className={cn(
-          '-ml-[3px] flex-1 overflow-y-auto border-[3px] border-cyan/30',
-          panelBg,
-        )}
-      >
+      <main className="-ml-[3px] flex-1 overflow-y-auto border-[3px] border-cyan/30 bg-surface/70">
         <Outlet />
       </main>
 
