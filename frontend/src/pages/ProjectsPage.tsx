@@ -52,7 +52,7 @@ export function ProjectsPage() {
       )}
 
       {projects.data && list.length === 0 && (
-        <div className="mx-8 rounded-lg border border-dashed border-border py-16 text-center">
+        <div className="mx-8 rounded-lg py-16 text-center">
           <p className="font-display text-lg font-bold tracking-[-0.02em]">
             No projects yet
           </p>

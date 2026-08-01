@@ -167,7 +167,7 @@ export function ServersTable() {
 
   if (!servers || servers.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border py-16">
+      <div className="flex flex-col items-center gap-4 rounded-lg py-16">
         <p className="font-display text-lg font-bold tracking-[-0.02em] text-text-dim">
           No servers yet.
         </p>
