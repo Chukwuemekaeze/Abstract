@@ -102,11 +102,18 @@ async def probe_server(
     port_from_client = body.port
     username_from_client = body.username
 
+    logger.info(
+        "Probe start: host={} port={} username={}",
+        host_from_client,
+        port_from_client,
+        username_from_client,
+    )
     try:
         probe_result = await ssh.probe(
             host_from_client, port_from_client, username_from_client
         )
     except ProbeError as exc:
+        logger.warning("Probe failed for host={}: {}", host_from_client, exc)
         raise HTTPException(502, str(exc)) from exc
 
     server = Server(
@@ -131,6 +138,12 @@ async def probe_server(
     await db.commit()
     await db.refresh(app_key)
 
+    logger.info(
+        "Probe ok: server={} host={} fingerprint={} (pending_verification)",
+        server.id,
+        server.host,
+        probe_result.fingerprint_sha256,
+    )
     return ProbeResponse(
         server_id=server.id,
         fingerprint_sha256=probe_result.fingerprint_sha256,
@@ -215,6 +228,11 @@ async def install_key(
             f"Server is not pending verification (status: {server.status}).",
         )
 
+    logger.info(
+        "Install key start: server={} disable_password_auth={}",
+        server.id,
+        disable_password_auth_from_client,
+    )
     try:
         app_key = await get_key_for_server(server, db)
     except AppKeyMissing as exc:
@@ -272,9 +290,18 @@ async def install_key(
         # bootstrap_password persisted (do NOT clear it) so a retry resumes via the
         # preflight above.
         await db.rollback()
+        logger.warning(
+            "Install key failed during forced-change exchange: server={} code={}",
+            server.id,
+            exc.code,
+        )
         raise _forced_change_http_error(exc) from exc
     except HostKeyChangedDuringInstall as exc:
         # Aborted before the key was appended; nothing to clean up on cancel.
+        logger.warning(
+            "Install key aborted: host key changed during install for server={}",
+            server.id,
+        )
         raise HTTPException(409, str(exc)) from exc
     except (KeyInstallVerificationFailed, SshHardeningFailed) as exc:
         # These only fire after the key was appended to authorized_keys (disable
@@ -283,8 +310,14 @@ async def install_key(
         # bootstrap_password so a retry can resume with the working password.
         server.key_installed = True
         await db.commit()
+        logger.warning(
+            "Install key verification failed after key append: server={} error={}",
+            server.id,
+            type(exc).__name__,
+        )
         raise HTTPException(502, str(exc)) from exc
     except ProbeError as exc:
+        logger.warning("Install key failed to connect: server={} {}", server.id, exc)
         raise HTTPException(502, str(exc)) from exc
 
     server.status = "verified"
@@ -296,6 +329,13 @@ async def install_key(
     await db.commit()
     await db.refresh(server)
 
+    logger.info(
+        "Install key ok: server={} verified, password_auth_disabled={} "
+        "root_password_is_managed={}",
+        server.id,
+        disable_password_auth_from_client,
+        password_is_managed,
+    )
     return ServerResponse.model_validate(server)
 
 
@@ -354,9 +394,13 @@ async def reregister_probe(
     Moves the row to awaiting_confirmation.
     """
     _require_reregisterable(server)
+    logger.info("Re-registration probe start: server={} host={}", server.id, server.host)
     try:
         probe_result = await ssh.probe(server.host, server.port, "root")
     except ProbeError as exc:
+        logger.warning(
+            "Re-registration probe failed to reach server={}: {}", server.id, exc
+        )
         raise _reregistration_http_error(
             ReregistrationError(
                 "NETWORK_UNREACHABLE",
@@ -373,6 +417,12 @@ async def reregister_probe(
     await db.commit()
     await db.refresh(server)
 
+    logger.info(
+        "Re-registration probe ok: server={} pending_fingerprint={} "
+        "(awaiting_confirmation)",
+        server.id,
+        probe_result.fingerprint_sha256,
+    )
     return ReregisterProbeResponse(
         server_id=server.id,
         fingerprint_sha256=probe_result.fingerprint_sha256,
@@ -409,6 +459,7 @@ async def reregister_complete(
             400, "Confirm the new fingerprint before completing re-registration."
         )
 
+    logger.info("Re-registration complete start: server={}", server.id)
     password_from_client = body.password
 
     try:
@@ -529,11 +580,17 @@ async def reregister_complete(
         # Discard the staged (uncommitted) post-access work; any write-ahead already
         # committed stays so the next attempt resumes.
         await db.rollback()
-        logger.info(
-            "Re-registration failed for server %s: %s", server.id, exc.code
+        logger.warning(
+            "Re-registration failed for server={} code={}", server.id, exc.code
         )
         raise _reregistration_http_error(exc) from exc
 
+    logger.info(
+        "Re-registration complete ok: server={} host key promoted, "
+        "root_password_is_managed={} (verified, unhardened)",
+        server.id,
+        server.root_password_is_managed,
+    )
     return ServerResponse.model_validate(server)
 
 
@@ -562,6 +619,7 @@ async def cancel_server(
         raise HTTPException(
             400, "Only pending verification servers can be cancelled."
         )
+    logger.info("Cancel registration start: server={}", server.id)
     try:
         steps = await cancel_registration(
             server=server,
@@ -586,6 +644,7 @@ async def cancel_server(
             },
         ) from exc
 
+    logger.info("Cancel registration ok: server={} row deleted", server.id)
     return DeleteServerResponse(success=True, steps=steps)
 
 
@@ -749,6 +808,12 @@ async def delete_server_route(
         raise HTTPException(
             409, {"active_operation": server.active_operation}
         )
+    logger.info(
+        "Delete server start: server={} status={} records_only={}",
+        server.id,
+        server.status,
+        records_only,
+    )
     revealed_root_password: str | None = None
     try:
         if records_only:
@@ -803,6 +868,7 @@ async def delete_server_route(
             },
         ) from exc
 
+    logger.info("Delete server ok: server={} row deleted", server.id)
     return DeleteServerResponse(
         success=True, steps=steps, revealed_root_password=revealed_root_password
     )
