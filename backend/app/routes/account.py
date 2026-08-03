@@ -20,6 +20,7 @@ from app.deps.services import (
     get_key_provider_dep,
     get_ssh_service,
 )
+from app.logging_config import logger
 from app.models import User
 from app.redis_client import get_redis
 from app.schemas.account import DeleteAccountResponse
@@ -54,6 +55,7 @@ async def delete_account_route(
     already torn down before the failure, and the account itself is left intact so
     the user can resolve the server and retry.
     """
+    logger.info("Delete account start: user={}", current_user.id)
     try:
         await delete_account(
             current_user=current_user,
@@ -66,6 +68,11 @@ async def delete_account_route(
             github=github,
         )
     except AccountDeletionError as exc:
+        logger.warning(
+            "Delete account blocked: user={} by server={}",
+            current_user.id,
+            exc.blocking_server_id,
+        )
         raise HTTPException(
             409,
             detail={
@@ -76,6 +83,8 @@ async def delete_account_route(
             },
         ) from exc
     except ClerkAccountDeletionError as exc:
+        logger.error("Delete account: local purge done but Clerk delete failed")
         raise HTTPException(502, detail={"message": str(exc)}) from exc
 
+    logger.info("Delete account ok: user={} account fully deleted", current_user.id)
     return DeleteAccountResponse(success=True)

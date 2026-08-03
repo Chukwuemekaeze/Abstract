@@ -393,6 +393,11 @@ async def delete_server(
                 "reset_root_password",
                 f"{_priv(server)}sh -c {shlex.quote(reset_script)}",
             )
+            # Event only; the generated password is returned to the user once and is
+            # never logged.
+            logger.info(
+                "Reset managed root password on server={} during deletion", server_id
+            )
             steps.append(
                 ServerDeletionStepResult(name="reset_root_password", status="completed")
             )

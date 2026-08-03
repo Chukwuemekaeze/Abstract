@@ -9,6 +9,7 @@ import asyncssh
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.logging_config import logger
 from app.models import AppSshKey, Server
 from app.services.key_provider import KeyProvider
 
@@ -47,6 +48,12 @@ async def create_key_for_server(
     )
     db.add(app_key)
     await db.flush()
+    # Only the fact and the public fingerprint; the private key is never logged.
+    logger.info(
+        "Generated app SSH key: server={} key_type=ssh-ed25519 fingerprint={}",
+        server.id,
+        private_key.get_fingerprint(),
+    )
     return app_key
 
 

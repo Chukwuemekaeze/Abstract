@@ -292,11 +292,18 @@ class SSHService:
             conn, _last_used, pooled_username = entry
             if pooled_username == server.username:
                 _connection_pool[pool_key] = (conn, _now(), pooled_username)
+                logger.debug("SSH pool hit: server={} user={}", server.id, user_id)
                 return conn
             # Identity changed since this connection was pooled. Drop it and open a
             # fresh one as the current user.
             conn.close()
             _connection_pool.pop(pool_key, None)
+            logger.warning(
+                "SSH pool identity changed for server={}: pooled={} now={}; reconnecting",
+                server.id,
+                pooled_username,
+                server.username,
+            )
 
         key_bytes = await self._load_private_key(
             server, session_id, redis, db, key_provider
@@ -315,12 +322,18 @@ class SSHService:
         except asyncssh.HostKeyNotVerifiable as exc:
             server.status = "key_mismatch"
             await db.commit()
+            logger.warning(
+                "Host key mismatch for server={} host={}; marked key_mismatch",
+                server.id,
+                server.host,
+            )
             raise HostKeyMismatch(
                 f"{server.host} presented a host key that does not match the "
                 "verified key on record."
             ) from exc
 
         _connection_pool[pool_key] = (conn, _now(), server.username)
+        logger.debug("SSH pool miss: opened new connection for server={}", server.id)
         return conn
 
     def evict_connection(self, user_id: UUID, server_id: UUID) -> None:

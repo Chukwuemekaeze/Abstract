@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     app_master_key: str
     key_provider: str = "env"
 
+    # Logging. log_level is the minimum level emitted (DEBUG surfaces the granular
+    # per-command traces; INFO is the milestone default). log_format selects the sink
+    # shape: "pretty" for colored human-readable lines in dev, "json" for one
+    # structured object per line in prod so a log aggregator can parse it.
+    log_level: str = "INFO"
+    log_format: str = "pretty"
+
     # Clerk authentication. All values come from the Clerk dashboard.
     clerk_secret_key: str
     # Kept for reference and any future issuer/CORS derivation.

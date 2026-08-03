@@ -26,6 +26,7 @@ from app.deps.project_ownership import (
     get_owned_project,
 )
 from app.deps.services import get_key_provider_dep, get_ssh_service
+from app.logging_config import logger
 from app.models import Project, ProjectDeployKey, Server, User
 from app.redis_client import get_redis
 from app.routes.projects import _project_fields
@@ -139,6 +140,7 @@ async def start_project_route(
     commit_sha: str | None = None
     git_ref: str | None = None
 
+    logger.info("Start project: project={} server={}", project_id, server.id)
     await acquire_operation(db, project, "starting")
     try:
         conn = await ssh.get_connection(
@@ -156,10 +158,14 @@ async def start_project_route(
         project.active_operation = None
     except (ComposeFileNotFound, EnvFileKeyCollision) as exc:
         await release_operation(db, project_id)
+        logger.warning("Start project rejected: project={} {}", project_id, exc)
         raise HTTPException(400, str(exc)) from exc
     except ComposeConfigInvalid as exc:
         await _record_run_failure(
             db, project_id, commit_sha, git_ref, exc.captured_output
+        )
+        logger.warning(
+            "Start project failed: project={} invalid compose file", project_id
         )
         raise HTTPException(
             502,
@@ -172,6 +178,9 @@ async def start_project_route(
     except (ComposeUpFailed, ContainerNotRunning) as exc:
         await _record_run_failure(
             db, project_id, commit_sha, git_ref, exc.captured_output
+        )
+        logger.warning(
+            "Start project failed: project={} {}", project_id, type(exc).__name__
         )
         raise HTTPException(
             502,
@@ -201,6 +210,12 @@ async def start_project_route(
             409, detail={"active_operation": "starting"}
         ) from exc
 
+    logger.info(
+        "Start project ok: project={} status={} commit={}",
+        project_id,
+        result.runtime_status,
+        commit_sha,
+    )
     return RunResultResponse(
         runtime_status=result.runtime_status,
         started_at=result.started_at,
@@ -230,6 +245,7 @@ async def pull_latest_route(
         )
     server = await _get_server(db, project)
 
+    logger.info("Pull latest: project={}", project.id)
     try:
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
@@ -240,6 +256,7 @@ async def pull_latest_route(
         raise HTTPException(409, str(exc)) from exc
     except PullFailed as exc:
         await db.rollback()
+        logger.warning("Pull latest failed: project={}", project.id)
         raise HTTPException(
             502,
             detail={
@@ -256,6 +273,12 @@ async def pull_latest_route(
 
     await db.commit()
     await db.refresh(project)
+    logger.info(
+        "Pull latest ok: project={} already_up_to_date={} after_commit={}",
+        project.id,
+        result.already_up_to_date,
+        result.after_commit,
+    )
     return PullResultResponse(
         before_commit=result.before_commit,
         after_commit=result.after_commit,
@@ -357,6 +380,12 @@ async def publish_project_route(
 
     server = await _get_server(db, project)
 
+    logger.info(
+        "Publish project start: project={} domain={} internal_port={}",
+        project_id,
+        domain_from_client,
+        internal_port_from_client,
+    )
     await acquire_operation(db, project, "publishing")
     try:
         conn = await ssh.get_connection(
@@ -375,17 +404,29 @@ async def publish_project_route(
         project.active_operation = None
     except (AppNotRunning, NginxNotInstalled, DomainDoesNotResolve) as exc:
         await release_operation(db, project_id)
+        logger.warning(
+            "Publish project rejected: project={} {}", project_id, type(exc).__name__
+        )
         raise HTTPException(400, str(exc)) from exc
     except (AlreadyPublished, DomainAlreadyUsed, PortAlreadyUsed) as exc:
         await release_operation(db, project_id)
+        logger.warning(
+            "Publish project conflict: project={} {}", project_id, type(exc).__name__
+        )
         raise HTTPException(409, str(exc)) from exc
     except NothingListening as exc:
         await release_operation(db, project_id)
+        logger.warning("Publish project failed: project={} nothing listening", project_id)
         raise HTTPException(
             502, detail={"message": str(exc), "captured_output": None}
         ) from exc
     except (NginxConfigInvalid, CertbotFailed, PublishVerificationFailed) as exc:
         await release_operation(db, project_id)
+        logger.warning(
+            "Publish project failed: project={} at stage {}",
+            project_id,
+            type(exc).__name__,
+        )
         raise HTTPException(
             502,
             detail={"message": str(exc), "captured_output": exc.captured_output},
@@ -408,6 +449,12 @@ async def publish_project_route(
         ) from exc
 
     await db.refresh(project)
+    logger.info(
+        "Publish project ok: project={} domain={} internal_port={}",
+        project_id,
+        project.domain,
+        project.internal_port,
+    )
     return ProjectResponse(**_project_fields(project, fingerprint))
 
 
@@ -484,6 +531,9 @@ async def rollback_project_route(
     commit_sha = target.git_commit_sha
     git_ref = target.git_ref
 
+    logger.info(
+        "Rollback project start: project={} target_commit={}", project_id, commit_sha
+    )
     await acquire_operation(db, project, "rolling_back")
     try:
         conn = await ssh.get_connection(
@@ -500,6 +550,9 @@ async def rollback_project_route(
     except RollbackCheckoutFailed as exc:
         # The tree could not be moved to the target commit; nothing was rebuilt.
         await release_operation(db, project_id)
+        logger.warning(
+            "Rollback project failed: project={} git checkout failed", project_id
+        )
         raise HTTPException(
             500,
             detail={
@@ -527,6 +580,9 @@ async def rollback_project_route(
         await _record_run_failure(
             db, project_id, commit_sha, git_ref, exc.captured_output
         )
+        logger.warning(
+            "Rollback project failed: project={} {}", project_id, type(exc).__name__
+        )
         raise HTTPException(
             502,
             detail={
@@ -550,6 +606,9 @@ async def rollback_project_route(
             409, detail={"active_operation": "rolling_back"}
         ) from exc
 
+    logger.info(
+        "Rollback project ok: project={} commit={}", project_id, commit_sha
+    )
     return RunResultResponse(
         runtime_status=result.runtime_status,
         started_at=result.started_at,

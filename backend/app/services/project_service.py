@@ -335,6 +335,13 @@ async def create_project(
         )
         clone_output = f"{result.stdout or ''}{result.stderr or ''}".rstrip()
         if result.exit_status not in (0, None):
+            # The captured git output is returned to the caller but never logged:
+            # it can echo tokens or private repo contents.
+            logger.warning(
+                "Clone failed: project={} repo={}",
+                project.id,
+                github_repo_full_name_from_client,
+            )
             raise CloneVerificationFailed(clone_output)
 
         # -- 10. Verify --------------------------------------------------------

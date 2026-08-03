@@ -78,6 +78,9 @@ All commands run from the `backend/` directory unless noted.
      `CLERK_AUTHORIZED_PARTIES`: from your Clerk dashboard (see Authentication above).
      `CLERK_AUTHORIZED_PARTIES` is a comma separated list of allowed frontend origins
      (for local dev, `http://localhost:5173`).
+   - `LOG_LEVEL` / `LOG_FORMAT` (optional): default to `INFO` and `pretty` (colored,
+     human-readable). Set `LOG_FORMAT=json` in production for structured one-object-
+     per-line logs, and `LOG_LEVEL=DEBUG` to surface the granular per-command traces.
 
 3. Start the dev services (Redis, and the local dev Postgres) from the repo root:
 

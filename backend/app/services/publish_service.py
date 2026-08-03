@@ -282,6 +282,11 @@ async def publish_project(
     resolved = await resolve_domain_dns(domain_from_client)
     if server.host not in resolved:
         raise DomainDoesNotResolve(server_host=server.host, resolved=resolved)
+    logger.info(
+        "Publish stage: DNS resolves to server for project={} domain={}",
+        project.id,
+        domain_from_client,
+    )
 
     priv = _priv(server)
     slug = project.slug
@@ -317,6 +322,7 @@ async def publish_project(
         result = await _run(conn, f"{priv}systemctl reload nginx")
         if result.exit_status not in (0, None):
             raise NginxConfigInvalid(_output(result))
+        logger.info("Publish stage: nginx config applied for project={}", project.id)
 
         # -- 7. Certbot ---------------------------------------------------------
         state.cert_requested = True
@@ -331,6 +337,11 @@ async def publish_project(
             raise CertbotFailed(f"certbot did not complete: {exc}") from exc
         if result.exit_status not in (0, None):
             raise CertbotFailed(_output(result))
+        logger.info(
+            "Publish stage: certbot certificate obtained for project={} domain={}",
+            project.id,
+            domain_from_client,
+        )
 
         # -- 8. Verify over HTTPS ------------------------------------------------
         result = await _run(
