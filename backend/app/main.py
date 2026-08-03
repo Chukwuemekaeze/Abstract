@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.logging_config import logger, setup_logging
+from app.middleware.logging import RequestLoggingMiddleware
 from app.routes import (
     account,
     env_files,
@@ -43,6 +44,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Added last so it sits outermost: it assigns the request id and logs in/out around
+# everything else, including CORS handling.
+app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(servers.router)
 app.include_router(hardening.router)

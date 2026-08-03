@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clerk import get_clerk_client
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.logging_config import logger
+from app.logging_config import bind_user_id, logger
 from app.models import User
 
 
@@ -105,6 +105,8 @@ async def get_current_user(
     )
     user = result.scalar_one_or_none()
     if user is not None:
+        # Bind the user id so every downstream log line for this request carries it.
+        bind_user_id(str(user.id))
         return user
 
     # Lazy sync: first request from this Clerk user.
@@ -127,9 +129,12 @@ async def get_current_user(
         existing = result.scalar_one_or_none()
         if existing is None:
             raise
+        bind_user_id(str(existing.id))
         return existing
 
     await db.refresh(user)
+    logger.info("Created user row on first request for clerk_user_id={}", user.clerk_user_id)
+    bind_user_id(str(user.id))
     return user
 
 
