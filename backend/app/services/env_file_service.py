@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.logging_config import logger
 from app.models import Project, ProjectEnvFile, ProjectEnvVar
 from app.schemas.env import validate_env_file_path
 from app.services.key_provider import KeyProvider
@@ -139,6 +140,13 @@ async def create_env_file(
             )
         )
     await db.flush()
+    # Path and variable count only; a value is never logged (see module docstring).
+    logger.info(
+        "Env file created: project={} path={} var_count={}",
+        project.id,
+        path,
+        len(variables_from_client),
+    )
     return env_file
 
 
@@ -204,12 +212,23 @@ async def update_env_file(
 
     env_file.updated_at = datetime.now(timezone.utc)
     await db.flush()
+    # Key names and counts only; values are never logged (see module docstring).
+    logger.info(
+        "Env file updated: project={} path={} set_keys={} removed_keys={}",
+        project.id,
+        env_file.path,
+        sorted(set_variables_from_client.keys()) if set_variables_from_client else [],
+        sorted(set(remove_keys_from_client)) if remove_keys_from_client else [],
+    )
     return env_file
 
 
 async def delete_env_file(*, db: AsyncSession, env_file: ProjectEnvFile) -> None:
+    path = env_file.path
+    project_id = env_file.project_id
     await db.delete(env_file)
     await db.flush()
+    logger.info("Env file deleted: project={} path={}", project_id, path)
 
 
 async def list_env_files(

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from app.logging_config import logger
 from app.schemas.projects import GithubRepoResponse
 
 _BASE_URL = "https://api.github.com"
@@ -53,6 +54,7 @@ def _check_rate_limit(response: httpx.Response) -> None:
             reset_at = datetime.fromtimestamp(int(reset_raw), tz=timezone.utc)
         except ValueError:
             reset_at = datetime.now(timezone.utc)
+        logger.warning("GitHub rate limit exceeded; resets at {}", reset_at.isoformat())
         raise GithubRateLimited(reset_at)
 
 
@@ -110,10 +112,23 @@ class GithubService:
             )
         _check_rate_limit(response)
         if response.status_code == 404:
+            logger.warning(
+                "GitHub deploy key add failed: repo={} not found or no admin access",
+                repo_full_name,
+            )
             raise GithubRepoNotFound(repo_full_name)
         if response.status_code not in (200, 201):
+            logger.warning(
+                "GitHub deploy key add failed: repo={} status={}",
+                repo_full_name,
+                response.status_code,
+            )
             raise GithubApiError(response.status_code, response.text)
-        return response.json()["id"]
+        key_id = response.json()["id"]
+        logger.info(
+            "GitHub deploy key added: repo={} key_id={}", repo_full_name, key_id
+        )
+        return key_id
 
     async def get_ssh_host_keys(self, token: str) -> list[str]:
         """GitHub's published SSH host keys, e.g. 'ssh-ed25519 AAAA...'.
@@ -142,7 +157,18 @@ class GithubService:
             )
         _check_rate_limit(response)
         if response.status_code in (204, 404):
+            logger.info(
+                "GitHub deploy key revoked: repo={} key_id={}",
+                repo_full_name,
+                github_deploy_key_id,
+            )
             return
+        logger.warning(
+            "GitHub deploy key revoke failed: repo={} key_id={} status={}",
+            repo_full_name,
+            github_deploy_key_id,
+            response.status_code,
+        )
         raise GithubApiError(response.status_code, response.text)
 
 

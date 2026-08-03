@@ -27,6 +27,7 @@ from app.deps.services import (
     get_key_provider_dep,
     get_ssh_service,
 )
+from app.logging_config import logger
 from app.models import Project, ProjectDeployKey, Server, User
 from app.redis_client import get_redis
 from app.deps.project_ownership import get_editable_project, get_owned_project
@@ -192,6 +193,11 @@ async def create_project_route(
     github_repo_id_from_client = body.github_repo_id
     github_repo_full_name_from_client = body.github_repo_full_name
 
+    logger.info(
+        "Create project start: server={} repo={}",
+        server_id_from_client,
+        github_repo_full_name_from_client,
+    )
     try:
         project, fingerprint = await create_project(
             name_from_client=name_from_client,
@@ -257,6 +263,13 @@ async def create_project_route(
 
     await db.commit()
     await db.refresh(project)
+    logger.info(
+        "Create project ok: project={} slug={} server={} repo={}",
+        project.id,
+        project.slug,
+        project.server_id,
+        project.github_repo_full_name,
+    )
     return ProjectResponse(**_project_fields(project, fingerprint))
 
 
@@ -324,6 +337,12 @@ async def delete_project_route(
     if server is None:
         raise HTTPException(404, "Server not found")
 
+    logger.info(
+        "Delete project start: project={} server={} repo={}",
+        project.id,
+        project.server_id,
+        project.github_repo_full_name,
+    )
     try:
         steps = await delete_project(
             project=project,
@@ -347,4 +366,5 @@ async def delete_project_route(
             },
         ) from exc
 
+    logger.info("Delete project ok: project={} row deleted", project.id)
     return DeleteProjectResponse(success=True, steps=steps)
