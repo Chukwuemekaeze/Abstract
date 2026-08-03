@@ -26,6 +26,7 @@ from app.deps.services import (
     get_key_provider_dep,
     get_ssh_service,
 )
+from app.logging_config import logger
 from app.models import Server, User
 from app.redis_client import get_redis
 from app.schemas.servers import (
@@ -85,29 +86,43 @@ async def _build_context(
 
 
 @asynccontextmanager
-async def _atomic(db: AsyncSession, server: Server):
+async def _atomic(db: AsyncSession, server: Server, operation: str):
     """Wrap an operation: commit once on success, roll back and map errors otherwise.
 
-    RootLoginPrecheckFailed is a guard (400). SudoUserAlreadyExists is a clean 409
-    (the requested Linux account already exists; we never adopt it). HardeningError
-    surfaces a generic message plus the captured shell output for the UI (502).
-    HostKeyMismatch is 409. Anything else rolls back and propagates as a 500.
+    Logs the operation start, success, and any failure (by type, never the captured
+    shell output, which can be verbose and echo values). RootLoginPrecheckFailed is a
+    guard (400). SudoUserAlreadyExists is a clean 409 (the requested Linux account
+    already exists; we never adopt it). HardeningError surfaces a generic message plus
+    the captured shell output for the UI (502). HostKeyMismatch is 409. Anything else
+    rolls back and propagates as a 500.
     """
+    logger.info("Harden {} start: server={}", operation, server.id)
     try:
         yield
     except RootLoginPrecheckFailed as exc:
         await db.rollback()
+        logger.warning("Harden {} precheck failed: server={}", operation, server.id)
         raise HTTPException(400, exc.captured_output) from exc
     except SudoUserAlreadyExists as exc:
         await db.rollback()
+        logger.warning(
+            "Harden {} rejected: server={} account already exists", operation, server.id
+        )
         raise HTTPException(409, exc.message) from exc
     except HostKeyMismatch as exc:
         await db.rollback()
+        logger.warning("Harden {} host key mismatch: server={}", operation, server.id)
         raise HTTPException(
             409, str(exc), headers={"X-Error-Code": "host_key_mismatch"}
         ) from exc
     except HardeningError as exc:
         await db.rollback()
+        logger.warning(
+            "Harden {} failed: server={} error={}",
+            operation,
+            server.id,
+            type(exc).__name__,
+        )
         raise HTTPException(
             502,
             detail={
@@ -117,10 +132,12 @@ async def _atomic(db: AsyncSession, server: Server):
         ) from exc
     except Exception:
         await db.rollback()
+        logger.exception("Harden {} errored: server={}", operation, server.id)
         raise
     else:
         await db.commit()
         await db.refresh(server)
+        logger.info("Harden {} ok: server={}", operation, server.id)
 
 
 @router.post("/update_system", response_model=ServerResponse)
@@ -135,7 +152,7 @@ async def update_system(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "update_system"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -155,7 +172,7 @@ async def install_base_packages(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "install_base_packages"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -175,7 +192,7 @@ async def install_docker(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "install_docker"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -195,7 +212,7 @@ async def install_nginx(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "install_nginx"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -220,7 +237,7 @@ async def create_sudo_user(
     ctx = await _build_context(
         server, current_user, session_id, redis, key_provider, db
     )
-    async with _atomic(db, server):
+    async with _atomic(db, server, "create_sudo_user"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -250,7 +267,7 @@ async def disable_root_login(
     ctx = await _build_context(
         server, current_user, session_id, redis, key_provider, db
     )
-    async with _atomic(db, server):
+    async with _atomic(db, server, "disable_root_login"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -270,7 +287,7 @@ async def disable_password_auth(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "disable_password_auth"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -290,7 +307,7 @@ async def configure_firewall(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "configure_firewall"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -310,7 +327,7 @@ async def create_swap(
     hardening: HardeningService = Depends(get_hardening_service),
 ) -> ServerResponse:
     _require_verified(server)
-    async with _atomic(db, server):
+    async with _atomic(db, server, "create_swap"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -333,7 +350,7 @@ async def reboot(
     ctx = await _build_context(
         server, current_user, session_id, redis, key_provider, db
     )
-    async with _atomic(db, server):
+    async with _atomic(db, server, "reboot"):
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
         )
@@ -357,6 +374,6 @@ async def quick_harden(
     ctx = await _build_context(
         server, current_user, session_id, redis, key_provider, db
     )
-    async with _atomic(db, server):
+    async with _atomic(db, server, "quick_harden"):
         await hardening.quick_harden(server, db, ctx, sudo_user_name_from_client)
     return ServerResponse.model_validate(server)
