@@ -153,6 +153,18 @@
   * {
     @apply border-border outline-ring/50;
     }
+  /* Browser autofill forces a white background and dark text on inputs that
+     background-color can't override; the inset box-shadow trick repaints them
+     to the dark palette so autofilled fields match the rest of the UI. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px var(--card) inset !important;
+    -webkit-text-fill-color: var(--foreground) !important;
+    caret-color: var(--foreground);
+    transition: background-color 9999s ease-out 0s;
+    }
   body {
     @apply bg-background text-foreground font-sans;
     /* App-wide cyan glow: two corner radial gradients over the base surface,

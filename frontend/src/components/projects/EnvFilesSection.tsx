@@ -1,9 +1,9 @@
 // Env files list on the project card: file rows (path + variable count) that
-// open the edit dialog, a two-click delete per row, and an add button. Values
-// are never displayed anywhere; the API only exposes keys and counts.
+// open the edit dialog, a delete-with-confirmation per row, and an add button.
+// Values are never displayed anywhere; the API only exposes keys and counts.
 
-import { useEffect, useState } from 'react'
-import { FileLock2, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { FileLock2, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { extractErrorMessage } from '@/api/client'
@@ -14,6 +14,14 @@ import {
   type EnvFileListItem,
 } from '@/api/env-files'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { EnvFileDialog } from '@/components/projects/EnvFileDialog'
 
 export function EnvFilesSection({ projectId }: { projectId: string }) {
@@ -23,14 +31,7 @@ export function EnvFilesSection({ projectId }: { projectId: string }) {
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<EnvFileListItem | null>(null)
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
-
-  // Two-click delete: the confirm state expires after a moment.
-  useEffect(() => {
-    if (!pendingDeleteId) return
-    const timer = setTimeout(() => setPendingDeleteId(null), 3000)
-    return () => clearTimeout(timer)
-  }, [pendingDeleteId])
+  const [confirmFile, setConfirmFile] = useState<EnvFileListItem | null>(null)
 
   const openCreate = () => {
     setEditing(null)
@@ -42,15 +43,12 @@ export function EnvFilesSection({ projectId }: { projectId: string }) {
     setDialogOpen(true)
   }
 
-  const onDeleteClick = async (file: EnvFileListItem) => {
-    if (pendingDeleteId !== file.id) {
-      setPendingDeleteId(file.id)
-      return
-    }
-    setPendingDeleteId(null)
+  const confirmDelete = async () => {
+    if (!confirmFile) return
     try {
-      await deleteMutation.mutateAsync(file.id)
-      toast.success(`Deleted ${file.path}.`)
+      await deleteMutation.mutateAsync(confirmFile.id)
+      toast.success(`Deleted ${confirmFile.path}.`)
+      setConfirmFile(null)
     } catch (err) {
       toast.error(extractErrorMessage(err, 'Deleting the env file failed'))
     }
@@ -97,17 +95,9 @@ export function EnvFilesSection({ projectId }: { projectId: string }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => onDeleteClick(file)}
-                  className={
-                    pendingDeleteId === file.id
-                      ? 'text-red-600'
-                      : 'text-muted-foreground hover:text-red-600'
-                  }
-                  title={
-                    pendingDeleteId === file.id
-                      ? 'Click again to delete permanently'
-                      : 'Delete env file'
-                  }
+                  onClick={() => setConfirmFile(file)}
+                  className="text-muted-foreground hover:text-red-600"
+                  title="Delete env file"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
@@ -134,6 +124,43 @@ export function EnvFilesSection({ projectId }: { projectId: string }) {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
       />
+
+      <Dialog
+        open={confirmFile !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setConfirmFile(null)
+        }}
+      >
+        <DialogContent className="max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Delete env file?</DialogTitle>
+            <DialogDescription>
+              <span className="font-mono">{confirmFile?.path}</span> and its
+              variables will be permanently removed. This can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setConfirmFile(null)}
+              disabled={deleteMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmDelete}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending && (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

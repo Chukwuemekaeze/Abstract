@@ -232,6 +232,10 @@ function EnvFileForm({
           value={path}
           onChange={(e) => setPath(e.target.value)}
           placeholder=".env or backend/.env"
+          autoComplete="off"
+          spellCheck={false}
+          data-1p-ignore
+          data-lpignore="true"
           disabled={isPending}
         />
         <p className="text-xs text-muted-foreground">
@@ -291,6 +295,10 @@ function EnvFileForm({
               value={row.key}
               onChange={(e) => updateRow(row.rowId, { key: e.target.value })}
               placeholder="KEY"
+              autoComplete="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
               className="w-2/5 font-mono text-xs"
               disabled={isPending || row.existing}
             />
@@ -300,6 +308,10 @@ function EnvFileForm({
                 value={row.value}
                 onChange={(e) => updateRow(row.rowId, { value: e.target.value })}
                 placeholder={row.existing ? HIDDEN_PLACEHOLDER : 'value'}
+                autoComplete="off"
+                spellCheck={false}
+                data-1p-ignore
+                data-lpignore="true"
                 className="pr-8 font-mono text-xs"
                 disabled={isPending}
               />
