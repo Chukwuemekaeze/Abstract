@@ -2,8 +2,9 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.logging_config import logger, setup_logging
@@ -55,6 +56,20 @@ app.include_router(projects.router)
 app.include_router(env_files.router)
 app.include_router(project_runtime.router)
 app.include_router(account.router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log any exception that escapes a route, with its traceback and request context.
+
+    HTTPException (expected control flow, handled by its own sites) does not reach here;
+    only genuinely unexpected failures do. logger.opt(exception=True) captures the full
+    traceback. The response matches FastAPI's default 500 so behaviour is unchanged.
+    """
+    logger.opt(exception=exc).error(
+        "Unhandled exception on {} {}", request.method, request.url.path
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 @app.get("/api/health")
