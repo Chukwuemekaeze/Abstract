@@ -12,6 +12,7 @@ that caused it. When no request is in scope (startup/shutdown) both fall back to
 """
 
 import logging
+import re
 import sys
 from contextvars import ContextVar
 
@@ -60,6 +61,29 @@ _PRETTY_FORMAT = (
 )
 
 
+# Backstop patterns for secrets that could appear verbatim in a log line we do not
+# author. asyncssh logs every command it runs at INFO, so a command that embeds a
+# credential inline (e.g. the chpasswd root-password reset) would otherwise land in
+# the log unredacted — our own code avoids logging secrets, but library logging does
+# not. These are a safety net, not a guarantee: they only catch shapes listed here.
+_GITHUB_TOKEN = re.compile(r"\bgh[posru]_[A-Za-z0-9]{20,}\b")
+_BEARER = re.compile(r"(?i)(authorization:\s*bearer\s+)\S+")
+# The password half of a `user:password` credential fed to chpasswd. Passwords never
+# contain whitespace, quotes, or a pipe, so the match stops cleanly at the shell
+# delimiter; the length floor avoids masking unix `user:group` pairs (chown root:root).
+_CHPASSWD_CRED = re.compile(r"(\b[\w.-]+:)([^\s'\"|]{8,})")
+
+
+def _redact(message: str) -> str:
+    """Mask known secret shapes in a log message, preserving surrounding context so
+    the line still shows what ran. Best-effort: only the patterns above are covered."""
+    if "chpasswd" in message:
+        message = _CHPASSWD_CRED.sub(r"\1***", message)
+    message = _GITHUB_TOKEN.sub("***", message)
+    message = _BEARER.sub(r"\1***", message)
+    return message
+
+
 class _InterceptHandler(logging.Handler):
     """Forwards standard library log records to loguru."""
 
@@ -76,7 +100,7 @@ class _InterceptHandler(logging.Handler):
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
+            level, _redact(record.getMessage())
         )
 
 

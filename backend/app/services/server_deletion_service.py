@@ -393,8 +393,10 @@ async def delete_server(
                 "reset_root_password",
                 f"{_priv(server)}sh -c {shlex.quote(reset_script)}",
             )
-            # Event only; the generated password is returned to the user once and is
-            # never logged.
+            # Event only; the generated password is returned to the user once. It rides
+            # inline in the command above, which asyncssh logs at INFO — the log_redact
+            # backstop (_redact in logging_config) masks the root: credential so it does
+            # not survive into the log.
             logger.info(
                 "Reset managed root password on server={} during deletion", server_id
             )

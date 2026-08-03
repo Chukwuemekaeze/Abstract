@@ -6,15 +6,18 @@ request, and that secret-handling code never lets a secret reach the log.
 """
 
 import contextlib
+import logging
+import shlex
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.logging_config import logger
+from app.logging_config import _redact, logger, setup_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.services.github_service import GithubService
+from app.services.server_reregistration_service import generate_bootstrap_password
 
 
 @contextlib.contextmanager
@@ -131,3 +134,50 @@ async def test_github_token_is_never_logged(mocker):
         assert sentinel_token not in record["message"]
         for arg in record.get("extra", {}).values():
             assert sentinel_token != arg
+
+
+def test_redact_masks_chpasswd_root_password():
+    """A generated root password embedded in the chpasswd command asyncssh logs is
+    masked, while the command stays recognizable (still shows root: and chpasswd)."""
+    password = generate_bootstrap_password()
+    # Built exactly as server_deletion_service does before handing it to asyncssh.
+    reset_script = f"printf %s {shlex.quote(f'root:{password}')} | chpasswd"
+    command = f"sudo sh -c {shlex.quote(reset_script)}"
+
+    redacted = _redact(f"  Command: {command}")
+
+    assert password not in redacted
+    assert "chpasswd" in redacted
+    assert "root:***" in redacted
+
+
+def test_redact_leaves_ordinary_commands_and_user_group_pairs_intact():
+    """Redaction must not mangle normal command logging (the reason we keep it)."""
+    for command in (
+        "cd /srv/app && docker compose up -d --build",
+        "chown -R root:root /etc/nginx",
+        "grep -qF 'github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQ' ~/.ssh/known_hosts",
+    ):
+        assert _redact(f"  Command: {command}") == f"  Command: {command}"
+
+
+def test_redact_masks_github_token():
+    assert "gho_" not in _redact("token=gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
+
+def test_asyncssh_command_is_redacted_through_the_intercept_handler(monkeypatch):
+    """End to end: a secret in a stdlib asyncssh log record is scrubbed on its way
+    into loguru, not just when _redact is called directly."""
+    # setup_logging is idempotent; reset the guard so it rewires the intercept handler.
+    monkeypatch.setattr("app.logging_config._configured", False)
+    setup_logging()
+
+    password = generate_bootstrap_password()
+    with capture_logs() as records:
+        logging.getLogger("asyncssh").info(
+            "  Command: %s", f"printf %s 'root:{password}' | chpasswd"
+        )
+
+    messages = [r["message"] for r in records]
+    assert any("root:***" in m for m in messages)
+    assert all(password not in m for m in messages)
