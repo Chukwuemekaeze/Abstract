@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clerk import get_clerk_client
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.integrations import monitoring
 from app.logging_config import bind_user_id, logger
 from app.models import User
 
@@ -30,6 +31,13 @@ from app.models import User
 class ClerkAuthState:
     clerk_user_id: str
     session_id: str
+
+
+def _bind_identity(user_id: str) -> None:
+    """Attach the resolved user id to both the log context and the Sentry scope, so a
+    request's log lines and any captured error carry the same user attribution."""
+    bind_user_id(user_id)
+    monitoring.set_user(user_id)
 
 
 async def get_clerk_auth_state(
@@ -105,8 +113,8 @@ async def get_current_user(
     )
     user = result.scalar_one_or_none()
     if user is not None:
-        # Bind the user id so every downstream log line for this request carries it.
-        bind_user_id(str(user.id))
+        # Bind the user id so every downstream log line and captured error carries it.
+        _bind_identity(str(user.id))
         return user
 
     # Lazy sync: first request from this Clerk user.
@@ -129,12 +137,12 @@ async def get_current_user(
         existing = result.scalar_one_or_none()
         if existing is None:
             raise
-        bind_user_id(str(existing.id))
+        _bind_identity(str(existing.id))
         return existing
 
     await db.refresh(user)
     logger.info("Created user row on first request for clerk_user_id={}", user.clerk_user_id)
-    bind_user_id(str(user.id))
+    _bind_identity(str(user.id))
     return user
 
 
