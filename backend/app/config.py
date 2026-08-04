@@ -43,6 +43,22 @@ class Settings(BaseSettings):
     # so the validator below receives the raw string.
     clerk_authorized_parties: Annotated[list[str], NoDecode]
 
+    # Sentry error reporting, tracing, and profiling. Create a Sentry project, then copy
+    # the DSN from the project settings. When sentry_dsn is unset the SDK initializes
+    # inert (no events sent), so dev and tests need no special handling.
+    sentry_dsn: str | None = None
+    # Segments events in the Sentry UI (e.g. "production", "staging", "development").
+    sentry_environment: str = "development"
+    # Fraction of requests traced and profiled. 1.0 captures everything (fine locally);
+    # lower it in prod (e.g. 0.1) to keep transaction/profile volume and cost in check.
+    sentry_traces_sample_rate: float = 1.0
+    sentry_profiles_sample_rate: float = 1.0
+    # Whether to attach personally identifiable info (client IP, request headers, etc.).
+    # Off by default; opt in per environment. Secrets are scrubbed via before_send either way.
+    sentry_send_default_pii: bool = False
+    # Ties events to a deployed version. Defaults to the FastAPI app version when unset.
+    sentry_release: str | None = None
+
     @field_validator("clerk_authorized_parties", mode="before")
     @classmethod
     def _split_authorized_parties(cls, value: object) -> object:
