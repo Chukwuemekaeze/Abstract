@@ -19,6 +19,7 @@ dependencies = [
     "loguru>=0.7,<1",
     "httpx",
     "dnspython>=2.8.0",
+    "sentry-sdk>=2.66.1",
 ]
 
 [project.optional-dependencies]

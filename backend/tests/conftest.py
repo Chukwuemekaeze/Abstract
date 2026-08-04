@@ -26,6 +26,9 @@ os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_placeholder")
 os.environ.setdefault("CLERK_PUBLISHABLE_KEY", "pk_test_placeholder")
 os.environ.setdefault("CLERK_JWT_ISSUER", "https://placeholder.clerk.accounts.dev")
 os.environ.setdefault("CLERK_AUTHORIZED_PARTIES", "http://localhost:5173")
+# Force Sentry inert during tests regardless of any DSN in the developer's .env or
+# shell, so intentional test errors never reach the live Sentry project.
+os.environ["SENTRY_DSN"] = ""
 
 import asyncio  # noqa: E402
 

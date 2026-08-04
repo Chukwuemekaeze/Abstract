@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+from app.integrations import monitoring
 from app.logging_config import logger, setup_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.routes import (
@@ -19,9 +20,10 @@ from app.routes import (
 )
 from app.services.ssh_service import clear_pool
 
-# Configure logging before anything starts emitting records.
+# Configure logging before anything starts emitting records, then wire monitoring.
 _settings = get_settings()
 setup_logging(level=_settings.log_level, fmt=_settings.log_format)
+monitoring.init_monitoring(_settings)
 
 
 @asynccontextmanager
@@ -69,6 +71,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     logger.opt(exception=exc).error(
         "Unhandled exception on {} {}", request.method, request.url.path
     )
+    monitoring.capture_exception(exc)
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
@@ -76,3 +79,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 async def health() -> dict[str, str]:
     """Liveness check."""
     return {"status": "ok"}
+
+
+if _settings.sentry_dsn:
+    # Only exposed when Sentry is configured: forces an error to verify the pipeline.
+    @app.get("/api/sentry-debug")
+    async def trigger_error():
+        division_by_zero = 1 / 0

@@ -14,7 +14,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.logging_config import _redact, logger, setup_logging
+from app.logging_config import logger, setup_logging
+from app.utils.redaction import redact_secrets
 from app.middleware.logging import RequestLoggingMiddleware
 from app.services.github_service import GithubService
 from app.services.server_reregistration_service import generate_bootstrap_password
@@ -144,7 +145,7 @@ def test_redact_masks_chpasswd_root_password():
     reset_script = f"printf %s {shlex.quote(f'root:{password}')} | chpasswd"
     command = f"sudo sh -c {shlex.quote(reset_script)}"
 
-    redacted = _redact(f"  Command: {command}")
+    redacted = redact_secrets(f"  Command: {command}")
 
     assert password not in redacted
     assert "chpasswd" in redacted
@@ -158,11 +159,11 @@ def test_redact_leaves_ordinary_commands_and_user_group_pairs_intact():
         "chown -R root:root /etc/nginx",
         "grep -qF 'github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQ' ~/.ssh/known_hosts",
     ):
-        assert _redact(f"  Command: {command}") == f"  Command: {command}"
+        assert redact_secrets(f"  Command: {command}") == f"  Command: {command}"
 
 
 def test_redact_masks_github_token():
-    assert "gho_" not in _redact("token=gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    assert "gho_" not in redact_secrets("token=gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 
 
 def test_asyncssh_command_is_redacted_through_the_intercept_handler(monkeypatch):
