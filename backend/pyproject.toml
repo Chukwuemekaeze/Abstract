@@ -20,6 +20,7 @@ dependencies = [
     "httpx",
     "dnspython>=2.8.0",
     "sentry-sdk>=2.66.1",
+    "logtail-python",
 ]
 
 [project.optional-dependencies]
