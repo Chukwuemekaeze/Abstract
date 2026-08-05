@@ -96,22 +96,27 @@ async def _atomic(db: AsyncSession, server: Server, operation: str):
     the captured shell output for the UI (502). HostKeyMismatch is 409. Anything else
     rolls back and propagates as a 500.
     """
-    logger.info("Harden {} start: server={}", operation, server.id)
+    # Capture the id while the attribute is still loaded. After a rollback the ORM
+    # expires every attribute, and reading one would trigger a lazy reload (illegal
+    # sync IO in an async session -> MissingGreenlet), so the error-branch logs below
+    # must use this local, not server.id.
+    server_id = server.id
+    logger.info("Harden {} start: server={}", operation, server_id)
     try:
         yield
     except RootLoginPrecheckFailed as exc:
         await db.rollback()
-        logger.warning("Harden {} precheck failed: server={}", operation, server.id)
+        logger.warning("Harden {} precheck failed: server={}", operation, server_id)
         raise HTTPException(400, exc.captured_output) from exc
     except SudoUserAlreadyExists as exc:
         await db.rollback()
         logger.warning(
-            "Harden {} rejected: server={} account already exists", operation, server.id
+            "Harden {} rejected: server={} account already exists", operation, server_id
         )
         raise HTTPException(409, exc.message) from exc
     except HostKeyMismatch as exc:
         await db.rollback()
-        logger.warning("Harden {} host key mismatch: server={}", operation, server.id)
+        logger.warning("Harden {} host key mismatch: server={}", operation, server_id)
         raise HTTPException(
             409, str(exc), headers={"X-Error-Code": "host_key_mismatch"}
         ) from exc
@@ -120,7 +125,7 @@ async def _atomic(db: AsyncSession, server: Server, operation: str):
         logger.warning(
             "Harden {} failed: server={} error={}",
             operation,
-            server.id,
+            server_id,
             type(exc).__name__,
         )
         raise HTTPException(
@@ -132,12 +137,12 @@ async def _atomic(db: AsyncSession, server: Server, operation: str):
         ) from exc
     except Exception:
         await db.rollback()
-        logger.exception("Harden {} errored: server={}", operation, server.id)
+        logger.exception("Harden {} errored: server={}", operation, server_id)
         raise
     else:
         await db.commit()
         await db.refresh(server)
-        logger.info("Harden {} ok: server={}", operation, server.id)
+        logger.info("Harden {} ok: server={}", operation, server_id)
 
 
 @router.post("/update_system", response_model=ServerResponse)

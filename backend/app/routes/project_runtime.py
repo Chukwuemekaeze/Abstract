@@ -245,7 +245,11 @@ async def pull_latest_route(
         )
     server = await _get_server(db, project)
 
-    logger.info("Pull latest: project={}", project.id)
+    # Capture the id before the work runs. A failed pull rolls back, which expires
+    # every attribute on `project`; reading project.id afterwards would trigger an
+    # illegal sync lazy-load (MissingGreenlet), so the error-branch log uses this local.
+    project_id = project.id
+    logger.info("Pull latest: project={}", project_id)
     try:
         conn = await ssh.get_connection(
             server, current_user.id, session_id, redis, db, key_provider
@@ -256,7 +260,7 @@ async def pull_latest_route(
         raise HTTPException(409, str(exc)) from exc
     except PullFailed as exc:
         await db.rollback()
-        logger.warning("Pull latest failed: project={}", project.id)
+        logger.warning("Pull latest failed: project={}", project_id)
         raise HTTPException(
             502,
             detail={
