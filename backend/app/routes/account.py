@@ -23,7 +23,7 @@ from app.deps.services import (
 from app.logging_config import logger
 from app.models import User
 from app.redis_client import get_redis
-from app.schemas.account import DeleteAccountResponse
+from app.schemas.account import CurrentUserResponse, DeleteAccountResponse
 from app.services.account_deletion_service import (
     AccountDeletionError,
     ClerkAccountDeletionError,
@@ -34,6 +34,18 @@ from app.services.key_provider import KeyProvider
 from app.services.ssh_service import SSHService
 
 router = APIRouter(prefix="/api/account", tags=["account"])
+
+
+@router.get("/me", response_model=CurrentUserResponse)
+async def get_me_route(
+    current_user: User = Depends(get_current_user),
+) -> CurrentUserResponse:
+    """Return the signed-in user's own identity.
+
+    The frontend fetches this so it can tag its monitoring events with the same
+    Postgres user id the backend uses, correlating client and server events.
+    """
+    return CurrentUserResponse(id=current_user.id, email=current_user.email)
 
 
 @router.delete("", response_model=DeleteAccountResponse)

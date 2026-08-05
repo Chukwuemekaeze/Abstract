@@ -2,13 +2,36 @@
 // backend, which tears down every server, purges our DB row, then deletes the Clerk
 // user. The caller signs the user out on success (their Clerk session is gone).
 
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 
 import { apiClient, extractErrorMessage } from '@/api/client'
 
 export interface DeleteAccountResponse {
   success: boolean
+}
+
+// The signed-in user's own identity. `id` is the Postgres user id — the same key
+// the backend tags its logs and errors with — so the frontend can attribute its
+// monitoring events to it and correlate the two sides.
+export interface CurrentUser {
+  id: string
+  email: string
+}
+
+// Fetch the signed-in user's identity. Enabled by the caller once Clerk reports
+// the user is signed in (the axios client attaches the Clerk token). Cached
+// effectively forever within a session: the id never changes while signed in.
+export function useCurrentUserQuery(enabled: boolean) {
+  return useQuery({
+    queryKey: ['currentUser'],
+    queryFn: async (): Promise<CurrentUser> => {
+      const { data } = await apiClient.get<CurrentUser>('/account/me')
+      return data
+    },
+    enabled,
+    staleTime: Infinity,
+  })
 }
 
 // Delete the signed-in user's account. On success everything the user owns is gone,

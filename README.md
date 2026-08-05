@@ -139,6 +139,15 @@ npm run dev
 `.env.local` (gitignored) holds `VITE_CLERK_PUBLISHABLE_KEY`, your Clerk publishable
 key. The app throws on startup if it is missing.
 
+`VITE_SENTRY_DSN` (optional, production) turns on frontend monitoring — error
+reporting, performance tracing, and session replay — via [Sentry](https://sentry.io),
+mirroring the backend's Sentry integration and tagging events with the same Postgres
+user id so the two sides correlate. When the DSN is unset the SDK is never
+initialized (no events sent), so dev and tests need no special handling. The sampling
+rates, environment, and PII toggle are configurable via the other `VITE_SENTRY_*`
+variables in `.env.example`; `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` are
+build-time-only and enable source map upload for readable production stack traces.
+
 The dev server runs on http://localhost:5173 and proxies `/api` to the backend on
 port 8000, so there is no CORS configuration to worry about during development.
 
