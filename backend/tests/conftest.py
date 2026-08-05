@@ -29,6 +29,9 @@ os.environ.setdefault("CLERK_AUTHORIZED_PARTIES", "http://localhost:5173")
 # Force Sentry inert during tests regardless of any DSN in the developer's .env or
 # shell, so intentional test errors never reach the live Sentry project.
 os.environ["SENTRY_DSN"] = ""
+# Likewise force remote log shipping off, so the suite never ships logs to a real
+# BetterStack source even if the developer's environment has a token set.
+os.environ["EXTERNAL_LOGGING_TOKEN"] = ""
 
 import asyncio  # noqa: E402
 

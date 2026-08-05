@@ -81,6 +81,11 @@ All commands run from the `backend/` directory unless noted.
    - `LOG_LEVEL` / `LOG_FORMAT` (optional): default to `INFO` and `pretty` (colored,
      human-readable). Set `LOG_FORMAT=json` in production for structured one-object-
      per-line logs, and `LOG_LEVEL=DEBUG` to surface the granular per-command traces.
+   - `EXTERNAL_LOGGING_TOKEN` / `EXTERNAL_LOGGING_HOST` (optional, production): ship the
+     log stream to a remote aggregator (implemented via BetterStack) for retention and
+     search. Set both from your BetterStack source to enable; leave unset and logs stay
+     on stderr only. `EXTERNAL_LOGGING_LEVEL` (default `INFO`) sets the minimum level
+     shipped, independent of `LOG_LEVEL`.
 
 3. Start the dev services (Redis, and the local dev Postgres) from the repo root:
 

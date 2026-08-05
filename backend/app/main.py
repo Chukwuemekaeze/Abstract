@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.integrations import monitoring
+from app.integrations import external_logging, monitoring
 from app.logging_config import logger, setup_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.routes import (
@@ -20,9 +20,11 @@ from app.routes import (
 )
 from app.services.ssh_service import clear_pool
 
-# Configure logging before anything starts emitting records, then wire monitoring.
+# Configure logging before anything starts emitting records, attach the remote log
+# sink (if configured), then wire monitoring.
 _settings = get_settings()
 setup_logging(level=_settings.log_level, fmt=_settings.log_format)
+external_logging.init_external_logging(_settings)
 monitoring.init_monitoring(_settings)
 
 
