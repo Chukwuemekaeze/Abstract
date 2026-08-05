@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     # Ties events to a deployed version. Defaults to the FastAPI app version when unset.
     sentry_release: str | None = None
 
+    # External log shipping (production log aggregation). Provider-agnostic on purpose:
+    # the app only knows there is a remote log sink, not who provides it. When the token
+    # is unset the sink is never attached, so dev and tests need no special handling
+    # (mirrors sentry_dsn). Implemented today by BetterStack in
+    # integrations/external_logging.py.
+    external_logging_token: str | None = None
+    external_logging_host: str | None = None
+    # Minimum level shipped remotely, independent of the console log_level (e.g. keep
+    # DEBUG locally while shipping only INFO+ to the aggregator).
+    external_logging_level: str = "INFO"
+
     @field_validator("clerk_authorized_parties", mode="before")
     @classmethod
     def _split_authorized_parties(cls, value: object) -> object:
