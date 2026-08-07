@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
@@ -23,18 +22,26 @@ class Base(DeclarativeBase):
 
 _settings = get_settings()
 
-# We connect through Neon's connection pooler, which already pools server side and
-# closes idle connections. Holding our own long lived pool on top of that leads to
-# reuse of connections Neon has dropped, surfacing as TLS "bad record mac" errors
-# that asyncpg does not report as disconnects (so pool_pre_ping cannot recover).
-# NullPool opens a fresh connection per checkout and disposes it on return, which
-# avoids stale reuse. statement_cache_size=0 disables asyncpg prepared statement
-# caching, required when sitting behind a PgBouncer style transaction pooler.
+# Connect to Neon's DIRECT endpoint (the host WITHOUT "-pooler"), not its PgBouncer
+# style pooler, and keep a real connection pool so requests reuse a warm connection
+# instead of paying a full connect (several network round trips: TCP + TLS + auth)
+# on every request.
+#
+# The pooler is why we previously ran NullPool (commit a0ca236): it drops connections
+# server side, and reusing one surfaced as a TLS "bad record mac" error that asyncpg
+# does not report as a disconnect, so pool_pre_ping could not recover. The direct
+# endpoint is a plain Postgres session (no PgBouncer), so a dropped connection is a
+# real disconnect asyncpg reports -- pool_pre_ping can recover, and prepared statement
+# caching works again (no statement_cache_size=0 needed). pool_recycle retires
+# connections before Neon's ~300s idle/autosuspend window so we never reuse a stale one.
 engine = create_async_engine(
     _settings.database_url,
     future=True,
-    poolclass=NullPool,
-    connect_args={"ssl": ssl_ctx, "statement_cache_size": 0},
+    pool_size=5,
+    max_overflow=5,
+    pool_recycle=240,
+    pool_pre_ping=True,
+    connect_args={"ssl": ssl_ctx},
 )
 
 async_session_factory = async_sessionmaker(
