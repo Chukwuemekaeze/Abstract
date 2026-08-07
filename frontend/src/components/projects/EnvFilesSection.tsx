@@ -10,7 +10,6 @@ import { extractErrorMessage } from '@/api/client'
 import {
   useDeleteEnvFileMutation,
   useEnvFiles,
-  useHasRootEnvFile,
   type EnvFileListItem,
 } from '@/api/env-files'
 import { Button } from '@/components/ui/button'
@@ -26,7 +25,6 @@ import { EnvFileDialog } from '@/components/projects/EnvFileDialog'
 
 export function EnvFilesSection({ projectId }: { projectId: string }) {
   const envFiles = useEnvFiles(projectId)
-  const hasRootEnv = useHasRootEnvFile(projectId)
   const deleteMutation = useDeleteEnvFileMutation(projectId)
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -55,6 +53,8 @@ export function EnvFilesSection({ projectId }: { projectId: string }) {
   }
 
   const files = envFiles.data ?? []
+  // The user manages a root .env themselves; drives the "auto-generated" hint.
+  const hasRootEnv = files.some((file) => file.path === '.env')
 
   return (
     <div className="flex flex-col gap-2">

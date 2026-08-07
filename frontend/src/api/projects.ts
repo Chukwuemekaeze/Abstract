@@ -159,10 +159,12 @@ export function useProjectsByServer(serverId: string | undefined) {
 }
 
 // The user's GitHub repos with admin permission, newest push first. Cached for
-// a minute so reopening the dialog does not double-hit GitHub.
-export function useGithubRepos() {
+// a minute so reopening the dialog does not double-hit GitHub. enabled lets the
+// dialog defer the (external) GitHub call until it is actually opened.
+export function useGithubRepos({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: projectKeys.githubRepos,
+    enabled,
     staleTime: 60_000,
     queryFn: async (): Promise<GithubRepo[]> => {
       const { data } = await apiClient.get<GithubRepo[]>('/github/repos')

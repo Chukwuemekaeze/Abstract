@@ -26,6 +26,11 @@ export const queryClient = new QueryClient({
     queries: {
       retry: 1,
       refetchOnWindowFocus: false,
+      // Default staleTime of 0 refetches on every mount/navigation/dialog open,
+      // producing many duplicate requests. 30s serves the cache instead;
+      // mutations still call invalidateQueries, which ignores staleTime, so the
+      // UI stays fresh after user actions.
+      staleTime: 30_000,
     },
   },
 })

@@ -62,12 +62,14 @@ export function NewProjectDialog() {
 
   const [repoPickerOpen, setRepoPickerOpen] = useState(false)
 
-  const servers = useServers()
-  const repos = useGithubRepos()
-  const createProject = useCreateProjectMutation()
-
   const isOpen = step !== 'idle'
   const isSubmitting = step === 'submitting'
+
+  // This dialog is mounted on several pages; only fetch its lists once the user
+  // actually opens it, so a page load does not hit /servers and the GitHub API.
+  const servers = useServers({ enabled: isOpen })
+  const repos = useGithubRepos({ enabled: isOpen })
+  const createProject = useCreateProjectMutation()
 
   // Only verified and hardened servers can host projects.
   const eligibleServers = (servers.data ?? []).filter(
