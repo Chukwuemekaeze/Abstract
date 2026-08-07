@@ -91,9 +91,12 @@ export const serverKeys = {
 }
 
 // List every server owned by the current user (newest first, ordered server side).
-export function useServers() {
+// enabled lets callers that only need the list on demand (e.g. a dialog) hold off
+// fetching until they are actually shown; defaults to true for eager callers.
+export function useServers({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: serverKeys.all,
+    enabled,
     queryFn: async (): Promise<Server[]> => {
       const { data } = await apiClient.get<Server[]>('/servers')
       return data

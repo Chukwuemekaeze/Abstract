@@ -67,13 +67,6 @@ export function useEnvFile(projectId: string, envFileId: string | null) {
   })
 }
 
-// True when the user manages a root .env themselves; drives the "a root .env
-// will be auto-generated" hint in the UI.
-export function useHasRootEnvFile(projectId: string): boolean {
-  const { data } = useEnvFiles(projectId)
-  return (data ?? []).some((file) => file.path === '.env')
-}
-
 function useInvalidateEnvFiles(projectId: string) {
   const qc = useQueryClient()
   return () =>
