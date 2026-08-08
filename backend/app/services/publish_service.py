@@ -38,6 +38,7 @@ __all__ = [
     "PublishVerificationFailed",
     "resolve_domain_dns",
     "build_nginx_config",
+    "check_domain_and_port_available",
     "publish_project",
     "cleanup_publish",
 ]
@@ -233,27 +234,19 @@ async def cleanup_publish(
             )
 
 
-async def publish_project(
-    *,
-    conn: asyncssh.SSHClientConnection,
+async def check_domain_and_port_available(
+    db: AsyncSession,
     project: Project,
     server: Server,
-    current_user: User,
     domain_from_client: str,
     internal_port_from_client: int,
-    db: AsyncSession,
-) -> Project:
-    # -- Preconditions (no side effects yet) --------------------------------
-    if project.runtime_status != "running":
-        raise AppNotRunning("Start your app before publishing.")
-    if project.published_at is not None:
-        raise AlreadyPublished(
-            f"This project is already published at {project.domain}."
-        )
-    if not server.nginx_installed:
-        raise NginxNotInstalled(
-            "nginx is not installed on this server; run the nginx hardening step first."
-        )
+) -> None:
+    """Best-effort DB uniqueness pre-check for domain and internal port.
+
+    Runs BEFORE the publish lock is taken so no pooled connection is held across
+    the certbot SSH. The partial unique indexes remain the real guarantee: the
+    endpoint's final commit still maps an IntegrityError to 409 on the rare race.
+    """
     domain_taken = await db.scalar(
         select(Project.id).where(
             Project.server_id == server.id,
@@ -276,6 +269,30 @@ async def publish_project(
         raise PortAlreadyUsed(
             f"Port {internal_port_from_client} is already published by another "
             "project on this server."
+        )
+
+
+async def publish_project(
+    *,
+    conn: asyncssh.SSHClientConnection,
+    project: Project,
+    server: Server,
+    current_user: User,
+    domain_from_client: str,
+    internal_port_from_client: int,
+) -> Project:
+    # -- Preconditions (no side effects yet) --------------------------------
+    # Domain/port uniqueness is checked by the caller before the lock; this does
+    # no DB access so no connection is held across the certbot SSH below.
+    if project.runtime_status != "running":
+        raise AppNotRunning("Start your app before publishing.")
+    if project.published_at is not None:
+        raise AlreadyPublished(
+            f"This project is already published at {project.domain}."
+        )
+    if not server.nginx_installed:
+        raise NginxNotInstalled(
+            "nginx is not installed on this server; run the nginx hardening step first."
         )
 
     # -- 1. DNS pre-check ----------------------------------------------------

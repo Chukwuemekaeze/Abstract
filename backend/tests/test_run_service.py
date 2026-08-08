@@ -19,6 +19,7 @@ from app.services.run_service import (
     ContainerNotRunning,
     EnvFileKeyCollision,
     detect_compose_file,
+    execute_run,
     get_detected_ports,
     refresh_status,
     run_compose_up,
@@ -481,6 +482,37 @@ async def test_start_project_happy_path_marks_running(
     assert project.runtime_status == "running"
     assert project.started_at is not None
     # Env file landed on the VPS before compose up.
+    assert f"{CLONE_PATH}/.env" in conn.sftp.opened_paths
+    assert b"PORT=8000\n" in conn.sftp.file.written
+
+
+async def test_execute_run_is_db_free(mocker):
+    # execute_run must never touch the DB: the caller decrypts env vars and
+    # releases the pooled connection BEFORE the long compose. A SimpleNamespace
+    # project (no DB session at all) is enough to drive the whole flow, which is
+    # the point -- if it ever queried the DB this would raise.
+    project = SimpleNamespace(
+        clone_path=CLONE_PATH,
+        compose_file_path=None,
+        runtime_status="never_started",
+        started_at=None,
+        updated_at=None,
+    )
+    conn = make_conn(
+        mocker,
+        {
+            f"{CLONE_PATH}/compose.yaml": result("yes\n"),
+            "up -d --build": result("built"),
+            "config --services": result("web\n"),
+            "ps -a --format json": result(ps_ndjson([service_entry("web")])),
+        },
+    )
+    run_result = await execute_run(
+        conn=conn, project=project, decrypted_vars={".env": {"PORT": "8000"}}
+    )
+    assert run_result.runtime_status == "running"
+    assert project.runtime_status == "running"
+    # Env vars came straight from the passed dict, written to the VPS.
     assert f"{CLONE_PATH}/.env" in conn.sftp.opened_paths
     assert b"PORT=8000\n" in conn.sftp.file.written
 
