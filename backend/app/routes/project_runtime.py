@@ -391,17 +391,30 @@ async def publish_project_route(
 
     server = await _get_server(db, project)
 
+    # Domain/port uniqueness check up front, before the lock, so no pooled
+    # connection is held across the certbot SSH. The SSH connection is opened
+    # here too (its pool-miss key read is committed away by acquire_operation).
+    try:
+        await publish_service.check_domain_and_port_available(
+            db, project, server, domain_from_client, internal_port_from_client
+        )
+    except (DomainAlreadyUsed, PortAlreadyUsed) as exc:
+        logger.warning(
+            "Publish project conflict: project={} {}", project_id, type(exc).__name__
+        )
+        raise HTTPException(409, str(exc)) from exc
+
     logger.info(
         "Publish project start: project={} domain={} internal_port={}",
         project_id,
         domain_from_client,
         internal_port_from_client,
     )
+    conn = await ssh.get_connection(
+        server, current_user.id, session_id, redis, db, key_provider
+    )
     await acquire_operation(db, project, "publishing")
     try:
-        conn = await ssh.get_connection(
-            server, current_user.id, session_id, redis, db, key_provider
-        )
         await publish_service.publish_project(
             conn=conn,
             project=project,
@@ -409,7 +422,6 @@ async def publish_project_route(
             current_user=current_user,
             domain_from_client=domain_from_client,
             internal_port_from_client=internal_port_from_client,
-            db=db,
         )
         fingerprint = await _fingerprint(db, project.id)
         project.active_operation = None
@@ -419,7 +431,7 @@ async def publish_project_route(
             "Publish project rejected: project={} {}", project_id, type(exc).__name__
         )
         raise HTTPException(400, str(exc)) from exc
-    except (AlreadyPublished, DomainAlreadyUsed, PortAlreadyUsed) as exc:
+    except AlreadyPublished as exc:
         await release_operation(db, project_id)
         logger.warning(
             "Publish project conflict: project={} {}", project_id, type(exc).__name__

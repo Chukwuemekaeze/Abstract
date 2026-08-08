@@ -17,6 +17,7 @@ from app.services.publish_service import (
     PublishVerificationFailed,
     _PublishState,
     build_nginx_config,
+    check_domain_and_port_available,
     cleanup_publish,
     publish_project,
 )
@@ -48,6 +49,9 @@ def happy_conn(mocker, extra: dict | None = None):
 
 
 async def run_publish(conn, db_session, project, server, user, domain=DOMAIN, port=PORT):
+    # Mirror the route: DB uniqueness check first (raises DomainAlreadyUsed /
+    # PortAlreadyUsed), then the DB-free publish over SSH.
+    await check_domain_and_port_available(db_session, project, server, domain, port)
     return await publish_project(
         conn=conn,
         project=project,
@@ -55,7 +59,6 @@ async def run_publish(conn, db_session, project, server, user, domain=DOMAIN, po
         current_user=user,
         domain_from_client=domain,
         internal_port_from_client=port,
-        db=db_session,
     )
 
 
