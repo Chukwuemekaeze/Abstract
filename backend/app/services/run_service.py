@@ -460,15 +460,16 @@ async def execute_run(
     *,
     conn: asyncssh.SSHClientConnection,
     project: Project,
-    db: AsyncSession,
-    key_provider: KeyProvider,
+    decrypted_vars: dict[str, dict[str, str]],
 ) -> RunResult:
     """Shared run mechanics for start and rollback: detect compose file, write
     env files, compose up, verify, mark running.
 
     Rollback checks out an older commit before calling this; start runs it
-    against HEAD. Env vars always come from the current DB state, never a
-    snapshot, so a rollback never silently reintroduces rotated secrets.
+    against HEAD. This does no DB access: the caller decrypts env vars up front
+    (from the current DB state, never a snapshot, so a rollback never silently
+    reintroduces rotated secrets) and commits any lock BEFORE the long compose,
+    so no pooled connection is held across the SSH work.
 
     Raises ComposeFileNotFound, EnvFileKeyCollision, ComposeUpFailed, or
     ContainerNotRunning; the caller's rollback keeps runtime_status at
@@ -477,9 +478,6 @@ async def execute_run(
     """
     compose_file = await detect_compose_file(
         conn, project.clone_path, project.compose_file_path
-    )
-    decrypted_vars = await env_file_service.get_decrypted_variables(
-        db, project, key_provider
     )
     await write_env_files_to_vps(conn, project, decrypted_vars)
     exit_code, build_output = await run_compose_up(
@@ -522,10 +520,14 @@ async def start_project(
     db: AsyncSession,
     key_provider: KeyProvider,
 ) -> RunResult:
-    """Run the project against its current HEAD. Thin wrapper over execute_run,
-    kept for callers that start without a rollback checkout."""
+    """Run the project against its current HEAD. Thin wrapper over execute_run
+    that decrypts env vars first, kept for callers that start without a rollback
+    checkout."""
+    decrypted_vars = await env_file_service.get_decrypted_variables(
+        db, project, key_provider
+    )
     return await execute_run(
-        conn=conn, project=project, db=db, key_provider=key_provider
+        conn=conn, project=project, decrypted_vars=decrypted_vars
     )
 
 

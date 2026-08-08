@@ -38,6 +38,7 @@ from app.schemas.project_runs import (
 )
 from app.schemas.projects import ProjectResponse, PullResultResponse
 from app.services import (
+    env_file_service,
     project_run_service,
     project_service,
     publish_service,
@@ -141,16 +142,22 @@ async def start_project_route(
     git_ref: str | None = None
 
     logger.info("Start project: project={} server={}", project_id, server.id)
+    # Do all DB work up front so no pooled connection is held across the long
+    # compose: decrypt env vars and open the SSH connection (whose pool-miss key
+    # read must be committed away by acquire_operation) BEFORE taking the lock.
+    decrypted_vars = await env_file_service.get_decrypted_variables(
+        db, project, key_provider
+    )
+    conn = await ssh.get_connection(
+        server, current_user.id, session_id, redis, db, key_provider
+    )
     await acquire_operation(db, project, "starting")
     try:
-        conn = await ssh.get_connection(
-            server, current_user.id, session_id, redis, db, key_provider
-        )
         commit_sha, git_ref = await project_run_service.resolve_git_state(
             conn, project.clone_path
         )
         result = await run_service.execute_run(
-            conn=conn, project=project, db=db, key_provider=key_provider
+            conn=conn, project=project, decrypted_vars=decrypted_vars
         )
         await project_run_service.record_running_run(
             db, project_id, commit_sha, git_ref, result.build_output
@@ -538,14 +545,20 @@ async def rollback_project_route(
     logger.info(
         "Rollback project start: project={} target_commit={}", project_id, commit_sha
     )
+    # Do all DB work up front so no pooled connection is held across the long
+    # compose: decrypt env vars and open the SSH connection (whose pool-miss key
+    # read must be committed away by acquire_operation) BEFORE taking the lock.
+    decrypted_vars = await env_file_service.get_decrypted_variables(
+        db, project, key_provider
+    )
+    conn = await ssh.get_connection(
+        server, current_user.id, session_id, redis, db, key_provider
+    )
     await acquire_operation(db, project, "rolling_back")
     try:
-        conn = await ssh.get_connection(
-            server, current_user.id, session_id, redis, db, key_provider
-        )
         await run_service.rollback_checkout(conn, project.clone_path, commit_sha)
         result = await run_service.execute_run(
-            conn=conn, project=project, db=db, key_provider=key_provider
+            conn=conn, project=project, decrypted_vars=decrypted_vars
         )
         await project_run_service.record_running_run(
             db, project_id, commit_sha, git_ref, result.build_output
