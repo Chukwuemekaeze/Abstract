@@ -7,10 +7,12 @@
 // active_operation in plain language.
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Rocket } from 'lucide-react'
+import { Loader2, Rocket, Settings, Trash2 } from 'lucide-react'
 
 import { type Project } from '@/api/projects'
+import { DeleteProjectDialog } from '@/components/projects/DeleteProjectDialog'
 import { EnvFilesSection } from '@/components/projects/EnvFilesSection'
+import { ProjectSettingsDialog } from '@/components/projects/ProjectSettingsDialog'
 import { PublishDialog } from '@/components/projects/PublishDialog'
 import { RuntimeControls } from '@/components/projects/RuntimeControls'
 import { VersionHistorySection } from '@/components/projects/VersionHistorySection'
@@ -114,17 +116,32 @@ export function ProjectDetailPanel({
 
 function ProjectDetailContent({ project }: { project: Project }) {
   const [publishOpen, setPublishOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+
+  const isBusy = project.active_operation != null
 
   return (
     <>
-      <div>
-        <h2 className="text-xl">{project.name}</h2>
-        <p className="mt-1 text-sm">
-          <StatusLine project={project} />
-        </p>
-        <p className="mt-1 font-mono text-xs text-text-dim">
-          {project.github_repo_full_name}
-        </p>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-xl">{project.name}</h2>
+          <p className="mt-1 text-sm">
+            <StatusLine project={project} />
+          </p>
+          <p className="mt-1 font-mono text-xs text-text-dim">
+            {project.github_repo_full_name}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+          title="Project settings"
+          disabled={isBusy}
+        >
+          <Settings className="size-4" />
+        </button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -143,6 +160,16 @@ function ProjectDetailContent({ project }: { project: Project }) {
         >
           <Rocket className="mr-1.5 size-3.5" />
           Publish
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          onClick={() => setDeleteOpen(true)}
+          disabled={isBusy}
+        >
+          <Trash2 className="mr-1.5 size-3.5" />
+          Delete
         </Button>
       </div>
 
@@ -166,6 +193,16 @@ function ProjectDetailContent({ project }: { project: Project }) {
         serverHost={project.server_host}
         open={publishOpen}
         onOpenChange={setPublishOpen}
+      />
+      <ProjectSettingsDialog
+        project={project}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+      />
+      <DeleteProjectDialog
+        project={project}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
       />
     </>
   )
