@@ -315,6 +315,63 @@ async def test_verify_config_failure_raises_compose_config_invalid(mocker):
     assert "mapping error" in exc_info.value.captured_output
 
 
+async def test_verify_ps_timeout_degrades_gracefully(mocker):
+    # An overloaded VPS makes `ps` hang; every attempt times out. Verification
+    # must not let the TimeoutError escape (that became an unhandled 500) -- it
+    # returns a failure with an explanation instead.
+    mocker.patch.object(run_service, "_VERIFY_RETRY_DELAY_SECONDS", 0)
+    conn = make_conn(
+        mocker,
+        {
+            "config --services": result("web\n"),
+            "ps -a --format json": TimeoutError(),
+        },
+    )
+    ok, output = await verify_containers_running(conn, CLONE_PATH, "compose.yaml")
+    assert ok is False
+    assert "overloaded" in output
+    # It retried the hung command up to the attempt limit before giving up.
+    ps_calls = [c for c in ran_commands(conn) if "ps -a --format json" in c]
+    assert len(ps_calls) == run_service._VERIFY_ATTEMPTS
+
+
+async def test_verify_ps_recovers_after_transient_timeout(mocker):
+    # First `ps` times out, the retry succeeds: verification reports running and
+    # never surfaces the transient failure.
+    mocker.patch.object(run_service, "_VERIFY_RETRY_DELAY_SECONDS", 0)
+    services = [service_entry("web")]
+    conn = make_conn(
+        mocker,
+        {
+            "config --services": result("web\n"),
+            "ps -a --format json": [TimeoutError(), result(ps_ndjson(services))],
+        },
+    )
+    ok, output = await verify_containers_running(conn, CLONE_PATH, "compose.yaml")
+    assert ok is True
+    assert output is None
+
+
+async def test_execute_run_verify_timeout_raises_container_not_running(mocker):
+    # End to end: compose up succeeds but verification keeps timing out. The
+    # request must fail with a handled ContainerNotRunning (mapped to a clean
+    # 502), never a raw TimeoutError.
+    mocker.patch.object(run_service, "_VERIFY_RETRY_DELAY_SECONDS", 0)
+    conn = make_conn(
+        mocker,
+        {
+            f"{CLONE_PATH}/compose.yaml": result("yes\n"),
+            "docker compose version": result("Docker Compose version v2\n"),
+            "up -d --build": result("built and started\n"),
+            "config --services": result("web\n"),
+            "ps -a --format json": TimeoutError(),
+        },
+    )
+    with pytest.raises(ContainerNotRunning) as exc_info:
+        await execute_run(conn=conn, project=fake_project(), decrypted_vars={})
+    assert "overloaded" in exc_info.value.captured_output
+
+
 # -- get_detected_ports -------------------------------------------------------
 
 
