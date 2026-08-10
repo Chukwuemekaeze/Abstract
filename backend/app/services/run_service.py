@@ -14,6 +14,7 @@ Build output is treated the same way: it may contain secrets a user echoed
 during a build step, so it is returned to the caller but never logged.
 """
 
+import asyncio
 import json
 import posixpath
 import shlex
@@ -70,6 +71,13 @@ _TIMEOUT_CHECK = 30
 _TIMEOUT_COMPOSE_UP = 900  # 15 minutes: first builds on small VPSes are slow
 _TIMEOUT_PS = 60
 _TIMEOUT_LOGS = 30
+
+# Verification runs docker CLI calls right after a build, when a small VPS is
+# still pegged (CPU/disk) and those calls can crawl or hit the SSH timeout. A
+# hung verify must never crash the request, so we retry the transient case a few
+# times before giving up gracefully.
+_VERIFY_ATTEMPTS = 3
+_VERIFY_RETRY_DELAY_SECONDS = 3
 
 # Cap the build transcript returned to the client. The tail is kept because
 # build errors land at the end; a marker tells the user output was cut.
@@ -393,11 +401,42 @@ def _evaluate_services(
     return by_service, missing, not_running
 
 
+async def _verify_with_retry(operation):
+    """Run a verification SSH call, retrying the transient failure modes a few
+    times before giving up. Only transport/timeout errors are retried; domain
+    errors (ComposeConfigInvalid, ContainerNotRunning) raised on a real nonzero
+    exit are not asyncssh/OS errors, so they propagate immediately. Mirrors the
+    timeout guard already used by run_compose_up."""
+    last_exc: BaseException | None = None
+    for attempt in range(_VERIFY_ATTEMPTS):
+        try:
+            return await operation()
+        except (TimeoutError, asyncssh.Error, OSError) as exc:
+            last_exc = exc
+            if attempt < _VERIFY_ATTEMPTS - 1:
+                await asyncio.sleep(_VERIFY_RETRY_DELAY_SECONDS)
+    raise last_exc  # type: ignore[misc]  # loop body only exits here via except
+
+
 async def verify_containers_running(
     conn: asyncssh.SSHClientConnection, clone_path: str, compose_file: str
 ) -> tuple[bool, str | None]:
-    defined = await _defined_services(conn, clone_path, compose_file)
-    entries, _ = await _compose_ps(conn, clone_path, compose_file)
+    # config --services and ps run right after a build, when an overloaded VPS
+    # can make them crawl or hang. Retry the transient case; if they still can't
+    # complete, degrade to a graceful failure rather than letting the timeout
+    # escape as an unhandled 500 (the app may in fact be running).
+    try:
+        defined = await _verify_with_retry(
+            lambda: _defined_services(conn, clone_path, compose_file)
+        )
+        entries, _ = await _verify_with_retry(
+            lambda: _compose_ps(conn, clone_path, compose_file)
+        )
+    except (TimeoutError, asyncssh.Error, OSError):
+        return False, (
+            "Abstract couldn't confirm the containers within the time limit; the "
+            "server may be overloaded."
+        )
     by_service, missing, not_running = _evaluate_services(defined, entries)
     if not missing and not not_running:
         return True, None
