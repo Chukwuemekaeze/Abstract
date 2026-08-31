@@ -1,0 +1,26 @@
+# Secrets and local env: VITE_ values enter the build as explicit build args
+# only, never via the context.
+.env
+.env.*
+.env.example
+*.local
+
+# VCS and local tooling
+.git
+.gitignore
+.claude
+
+# Dependencies and previous build output (rebuilt inside the image)
+node_modules
+dist
+.vite/
+
+# Test and coverage output (test SOURCE files under src/ stay in the context,
+# since tsc -b type-checks them as part of npm run build)
+coverage/
+
+# Docs, logs, docker files themselves
+*.md
+*.log
+Dockerfile
+.dockerignore
