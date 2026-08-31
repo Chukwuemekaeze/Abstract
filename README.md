@@ -151,6 +151,31 @@ build-time-only and enable source map upload for readable production stack trace
 The dev server runs on http://localhost:5173 and proxies `/api` to the backend on
 port 8000, so there is no CORS configuration to worry about during development.
 
+## Production containers
+
+Production runs from containers built on the box from cloned source (no
+registry, no prebuilt images):
+
+- `backend/Dockerfile`: the FastAPI backend image (uvicorn, single worker,
+  non-root, no local system binaries). Published on loopback only; host Nginx
+  proxies `/api` to it.
+- `frontend/Dockerfile`: build-only image that produces the static Vite
+  `dist/` (the `VITE_` vars are passed as build args). The dist is extracted
+  to the host Nginx web root; there is no frontend runtime container.
+- `docker-compose.prod.yml`: the runtime stack, backend plus an ephemeral
+  Redis (persistence off, unexposed, mirroring the dev compose security
+  requirement). Postgres stays external, so it is not a compose service.
+
+Runtime configuration comes from `backend/.env` via the compose `env_file`;
+nothing is baked into images. Migrations run as an explicit step from the
+backend image before the stack comes up:
+
+```bash
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ## Smoke test (end to end)
 
 1. Start the backend (port 8000) and the frontend (port 5173).

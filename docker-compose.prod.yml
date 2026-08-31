@@ -1,0 +1,82 @@
+# Production stack: backend + ephemeral Redis. Built from cloned source on the
+# box; no registry, no prebuilt images.
+#
+# Not here on purpose:
+#   postgres  - external managed database (Supabase, direct connection),
+#               reached over TLS via DATABASE_URL in backend/.env.
+#   frontend  - build-only artifact (see frontend/Dockerfile); host Nginx
+#               serves the static dist and proxies /api to the backend.
+#
+# The stack is stateless: no volumes anywhere. Redis caches DECRYPTED SSH
+# private keys for a bounded TTL; that plaintext must never touch disk or
+# survive a restart, so persistence stays fully disabled (mirrors
+# docker-compose.dev.yml). Sessions and key material rebuild from Postgres
+# and Clerk after a restart.
+#
+# Logging: no per-service logging config on purpose; the docker daemon's
+# json-file rotation already configured on the host applies.
+
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      # Service wiring belongs to the compose file; this overrides any stale
+      # REDIS_URL left in backend/.env.
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      # Loopback only: host Nginx proxies /api here. Never expose publicly.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # Stdlib urllib probe; curl is intentionally absent from the image.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 5s
+      # Settings, Sentry, and logging initialize at import time; give the
+      # process a moment before counting failures.
+      start_period: 15s
+      retries: 3
+    networks:
+      - abstract_internal
+
+  redis:
+    image: redis:7-alpine
+    # Persistence OFF (no AOF, no RDB snapshots) and no volume: decrypted key
+    # material stays in memory only.
+    #
+    # maxmemory-policy noeviction: if the 256mb cap is ever hit, writes fail
+    # loudly (requests error) instead of Redis silently evicting live sessions
+    # or cached keys. The volatile-* and allkeys-* policies would evict them,
+    # since every key here carries a TTL. 256mb is far above the expected
+    # working set of sessions plus the short-lived SSH key cache.
+    command:
+      [
+        "redis-server",
+        "--appendonly", "no",
+        "--save", "",
+        "--maxmemory", "256mb",
+        "--maxmemory-policy", "noeviction",
+      ]
+    # No ports published: reachable only on the internal network.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - abstract_internal
+
+networks:
+  abstract_internal:
+    driver: bridge

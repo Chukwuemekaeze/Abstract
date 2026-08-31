@@ -70,6 +70,8 @@ Thumbs.db
 # ---- Docker ----
 # Local compose overrides
 docker-compose.override.yml
+# Box-local deployment runbook, kept out of the repo
+PROD_CONTAINERS.md
 
 
 
