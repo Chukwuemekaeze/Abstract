@@ -1,0 +1,35 @@
+# Keep the build context to exactly what the image needs:
+# app/, alembic/, alembic.ini, pyproject.toml, uv.lock.
+
+# Secrets: never enter the build context. Config reaches the container at
+# runtime via the compose env_file only.
+.env
+.env.*
+.env.example
+
+# VCS and local tooling
+.git
+.gitignore
+.claude
+
+# Python local state
+.venv
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Tests and dev-only code
+tests/
+scripts/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Docs, logs, docker files themselves
+*.md
+*.log
+Dockerfile
+.dockerignore
