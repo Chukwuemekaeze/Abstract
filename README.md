@@ -502,3 +502,10 @@ client input.
 `get_owned_server` resolves a server by id and confirms it belongs to the current
 user, returning 404 (not 403) on a mismatch so the API does not leak which server
 ids exist.
+
+## License
+
+Abstract is licensed under the GNU Affero General Public License v3.0 or later.
+
+The Abstract name, logo, and brand assets are not licensed under the AGPL. All rights
+to the Abstract brand are reserved.
