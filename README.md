@@ -505,7 +505,12 @@ ids exist.
 
 ## License
 
-Abstract is licensed under the GNU Affero General Public License v3.0 or later.
+Abstract's source code is licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE).
 
-The Abstract name, logo, and brand assets are not licensed under the AGPL. All rights
-to the Abstract brand are reserved.
+This means you can use, study, modify, and share the code under the terms of the
+AGPL. If you run a modified version of Abstract as a network service, you must make
+the corresponding source code available to users of that service.
+
+The Abstract name, logo, and brand assets are not licensed under the AGPL. All
+rights to the Abstract brand are reserved.
