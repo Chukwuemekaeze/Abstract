@@ -8,7 +8,7 @@
 # Deliberately NOT installed: openssh-client, git, docker, certbot, curl. The
 # backend invokes no local binaries (all SSH and key work is in-process via
 # asyncssh) and writes nothing to the local filesystem. ca-certificates is
-# required for TLS to Postgres (Supabase), Clerk, GitHub, and Sentry.
+# required for TLS to Postgres (Neon), Clerk, GitHub, and Sentry.
 #
 # No .env or secrets are ever copied in (see .dockerignore); configuration
 # reaches the container at runtime via the compose env_file.

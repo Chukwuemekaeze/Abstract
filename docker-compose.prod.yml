@@ -2,7 +2,7 @@
 # box; no registry, no prebuilt images.
 #
 # Not here on purpose:
-#   postgres  - external managed database (Supabase, direct connection),
+#   postgres  - external managed database (Neon, direct connection),
 #               reached over TLS via DATABASE_URL in backend/.env.
 #   frontend  - build-only artifact (see frontend/Dockerfile); host Nginx
 #               serves the static dist and proxies /api to the backend.
