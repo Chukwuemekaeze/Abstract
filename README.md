@@ -126,6 +126,15 @@ TEST_DATABASE_URL=postgresql+asyncpg://deploy:deploy@localhost:5432/deploy_pipel
 Tests that do not need a database (key provider, mocked SSH service) run even
 without `TEST_DATABASE_URL` set; the DB backed ones skip in that case.
 
+DB backed tests are automatically marked `integration` (see `tests/conftest.py`),
+so either group can be run on its own:
+
+```bash
+.venv/bin/python -m pytest -m "not integration"   # unit tests only, no DB needed
+TEST_DATABASE_URL=postgresql+asyncpg://deploy:deploy@localhost:5432/deploy_pipeline_test \
+  .venv/bin/python -m pytest -m integration       # DB backed tests only
+```
+
 ## Frontend setup
 
 From the `frontend/` directory:
