@@ -15,7 +15,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings",
     "python-dotenv",
-    "clerk-backend-api>=6.0,<7",
+    "clerk-backend-api>=7.0,<8",
     "loguru>=0.7,<1",
     "httpx",
     "dnspython>=2.8.0",
