@@ -38,6 +38,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The base image's system pip carries known CVEs. The app never uses it (deps
+# live in the uv-built venv), but keep it on a patched version.
+RUN pip install --no-cache-dir --upgrade pip
+
 RUN useradd --uid 10001 --create-home appuser
 
 WORKDIR /app
