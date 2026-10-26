@@ -6,7 +6,7 @@
 # cp, see PROD_CONTAINERS.md); host Nginx serves the files and proxies /api.
 # No nginx or node runs from this image.
 
-FROM node:20 AS build
+FROM node:24.22.1 AS build
 
 WORKDIR /app
 
