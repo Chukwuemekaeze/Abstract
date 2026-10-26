@@ -29,6 +29,7 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "pytest-mock",
+    "ruff>=0.17.2",
 ]
 
 [build-system]
