@@ -1,0 +1,10 @@
+# Gitleaks config: default rules plus the allowlist below.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+# Fake Clerk secret used by the test suite and CI. Its sk_test_ prefix matches
+# the Stripe key rule, but it is not a real credential.
+description = "Test placeholder Clerk secret key"
+regexes = ['''sk_test_placeholder''']
