@@ -1,0 +1,20 @@
+# Trivy findings accepted on purpose.
+
+# Clerk publishable key (pk_test_/pk_live_) in the frontend bundle matches the
+# Stripe publishable key rule. It is public by design, not a leaked secret.
+stripe-publishable-token
+
+# Copies of urllib3, setuptools and msgpack bundled inside the system pip that
+# ships with the python:3.12-slim base image (pip/_vendor). Even the latest pip
+# vendors these versions. The app never runs that pip: its deps live in the
+# uv-built venv, which has patched versions and is audited by pip-audit.
+# urllib3 2.7.0
+CVE-2026-97687
+CVE-2026-97688
+CVE-2026-97689
+# setuptools 70.3.0
+CVE-2025-47273
+CVE-2026-59890
+GHSA-xmj3-9gf7-h52w
+# msgpack 1.1.2
+GHSA-6v7p-g79w-8964
