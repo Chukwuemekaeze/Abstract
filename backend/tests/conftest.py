@@ -71,6 +71,23 @@ requires_db = pytest.mark.skipif(
 )
 
 
+def pytest_collection_modifyitems(config, items):
+    """Mark every DB backed test as integration.
+
+    A test is DB backed when it depends on db_session, directly or through
+    fixtures built on it (client, test_user, ...). fixturenames holds the full
+    transitive closure, so no test file needs to be marked by hand. Tests that
+    carry requires_db (some files apply it module wide) are included too: they
+    skip without a DB, so leaving them unmarked would mean no run ever executes
+    them. Select with `pytest -m integration` or `pytest -m "not integration"`.
+    """
+    for item in items:
+        uses_db = "db_session" in getattr(item, "fixturenames", ())
+        skips_without_db = requires_db.mark in item.iter_markers("skipif")
+        if uses_db or skips_without_db:
+            item.add_marker(pytest.mark.integration)
+
+
 async def _ensure_test_database() -> None:
     """Create the test database if it does not already exist.
 
