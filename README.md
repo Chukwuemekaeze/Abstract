@@ -42,7 +42,7 @@ Clerk user. See [Deleting your account](#deleting-your-account).
 
 ## Prerequisites
 
-- Node 20+
+- Node 24.22.1+ (patched for the October 2026 Node.js security release)
 - Python 3.12
 - Docker (for the dev Redis and the local dev Postgres)
 
