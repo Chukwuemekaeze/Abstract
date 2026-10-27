@@ -6,6 +6,8 @@ boundary; create_project is called directly, with the test owning the session
 exactly like the route handler does.
 """
 
+from datetime import UTC
+
 import pytest
 from sqlalchemy import select
 
@@ -19,7 +21,7 @@ from app.services.project_service import (
     ServerNotEligible,
     create_project,
 )
-from tests.conftest import FakeRedis, TEST_SESSION_ID, requires_db
+from tests.conftest import TEST_SESSION_ID, FakeRedis, requires_db
 from tests.project_mocks import (
     make_conn,
     make_github,
@@ -283,12 +285,12 @@ CLONE_PATH = "/home/deploy/anibantsdotNG"
 
 
 def _fake_pull_project():
-    from datetime import datetime, timezone
+    from datetime import datetime
     from types import SimpleNamespace
 
     return SimpleNamespace(
         clone_path=CLONE_PATH,
-        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 

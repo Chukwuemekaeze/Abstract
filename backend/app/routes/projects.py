@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clerk import get_clerk_client
 from app.db import get_db
 from app.deps.auth import get_current_session_id, get_current_user
+from app.deps.project_ownership import get_editable_project, get_owned_project
 from app.deps.server_ownership import get_owned_server
 from app.deps.services import (
     get_github_service,
@@ -30,7 +31,6 @@ from app.deps.services import (
 from app.logging_config import logger
 from app.models import Project, ProjectDeployKey, Server, User
 from app.redis_client import get_redis
-from app.deps.project_ownership import get_editable_project, get_owned_project
 from app.schemas.projects import (
     CreateProjectRequest,
     DeleteProjectResponse,
@@ -39,11 +39,11 @@ from app.schemas.projects import (
     ProjectResponse,
     UpdateProjectRequest,
 )
+from app.services.clerk_oauth import GithubTokenUnavailable, get_github_oauth_token
 from app.services.env_file_service import (
     EnvFilePathInvalid,
     validate_path_within_clone,
 )
-from app.services.clerk_oauth import GithubTokenUnavailable, get_github_oauth_token
 from app.services.github_service import (
     GithubApiError,
     GithubRateLimited,

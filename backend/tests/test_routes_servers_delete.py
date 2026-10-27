@@ -7,7 +7,7 @@ assert both the HTTP contract and the DB side effects: server row gone on succes
 row intact with every lock cleared on any failure, and the exact teardown order.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -148,7 +148,7 @@ def test_remove_authorized_key_command_is_guarded():
 
 
 def test_order_projects_running_then_failed_then_never_started():
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
 
     def p(status, minutes):
         return SimpleNamespace(

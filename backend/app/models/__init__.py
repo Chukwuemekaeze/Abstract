@@ -9,14 +9,14 @@ from app.models.server import SERVER_STATUSES, Server
 from app.models.user import User
 
 __all__ = [
+    "PROJECT_RUN_STATUSES",
+    "SERVER_STATUSES",
     "AppSshKey",
     "Project",
     "ProjectDeployKey",
     "ProjectEnvFile",
     "ProjectEnvVar",
-    "PROJECT_RUN_STATUSES",
     "ProjectRun",
     "Server",
-    "SERVER_STATUSES",
     "User",
 ]

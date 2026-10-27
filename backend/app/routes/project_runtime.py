@@ -47,6 +47,7 @@ from app.services import (
 )
 from app.services.key_provider import KeyProvider
 from app.services.operation_lock import acquire_operation, release_operation
+from app.services.project_service import CloneMissing, PullFailed
 from app.services.publish_service import (
     AlreadyPublished,
     AppNotRunning,
@@ -59,7 +60,6 @@ from app.services.publish_service import (
     PortAlreadyUsed,
     PublishVerificationFailed,
 )
-from app.services.project_service import CloneMissing, PullFailed
 from app.services.rollback_service import (
     AlreadyAtThisVersion,
     CannotRollbackToFailedRun,

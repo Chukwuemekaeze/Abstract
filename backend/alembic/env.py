@@ -7,16 +7,15 @@ a single source of truth for configuration.
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
-from app.config import get_settings
-from app.db import Base, ssl_ctx
-
 # Import models so their tables are registered on Base.metadata.
 import app.models  # noqa: F401
+from alembic import context
+from app.config import get_settings
+from app.db import Base, ssl_ctx
 
 config = context.config
 

@@ -7,7 +7,7 @@ server with a cloned project.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models import Project, ProjectDeployKey, Server
 
@@ -94,7 +94,7 @@ async def seed_project(
         github_repo_full_name="Chukwuemekaeze/anibantsdotNG",
         github_repo_id=repo_id,
         clone_path=CLONE_PATH,
-        cloned_at=datetime.now(timezone.utc),
+        cloned_at=datetime.now(UTC),
         runtime_status=runtime_status,
         domain=domain,
         internal_port=internal_port,

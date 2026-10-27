@@ -33,30 +33,30 @@ os.environ["SENTRY_DSN"] = ""
 # BetterStack source even if the developer's environment has a token set.
 os.environ["EXTERNAL_LOGGING_TOKEN"] = ""
 
-import asyncio  # noqa: E402
+import asyncio
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.engine import make_url  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from app.clerk import get_clerk_client  # noqa: E402
-from app.db import Base, get_db  # noqa: E402
-from app.deps.auth import (  # noqa: E402
+from app.clerk import get_clerk_client
+from app.db import Base, get_db
+from app.deps.auth import (
     ClerkAuthState,
     get_clerk_auth_state,
     get_current_session_id,
     get_current_user,
 )
-from app.deps.services import get_ssh_service  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models import User  # noqa: E402
-from app.redis_client import get_redis  # noqa: E402
+from app.deps.services import get_ssh_service
+from app.main import app
+from app.models import User
+from app.redis_client import get_redis
 
 # Deterministic Clerk identity used by the mocked auth fixtures.
 TEST_CLERK_USER_ID = "user_test_123"

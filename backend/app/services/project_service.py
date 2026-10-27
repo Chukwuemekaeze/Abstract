@@ -15,7 +15,7 @@ project files belong to the sudo user's own home.
 
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncssh
@@ -34,15 +34,15 @@ from app.services.ssh_service import SSHService
 from app.utils.slug import slugify
 
 __all__ = [
-    "ProjectServiceError",
-    "ServerNotEligible",
-    "DuplicateProject",
+    "CloneMissing",
     "ClonePathOccupied",
     "CloneVerificationFailed",
-    "CloneMissing",
+    "DuplicateProject",
+    "GithubTokenUnavailable",
+    "ProjectServiceError",
     "PullFailed",
     "PullResult",
-    "GithubTokenUnavailable",
+    "ServerNotEligible",
     "create_project",
     "pull_latest",
 ]
@@ -352,7 +352,7 @@ async def create_project(
             raise CloneVerificationFailed(clone_output)
 
         # -- 11. Mark cloned ---------------------------------------------------
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         project.cloned_at = now
         project.updated_at = now
     except Exception:
@@ -492,7 +492,7 @@ async def pull_latest(
         await _git(conn, quoted_clone_path, "rev-parse --short HEAD", _TIMEOUT_CHECK)
     ).strip()
 
-    project.updated_at = datetime.now(timezone.utc)
+    project.updated_at = datetime.now(UTC)
     return PullResult(
         before_commit=before_commit,
         after_commit=after_commit,

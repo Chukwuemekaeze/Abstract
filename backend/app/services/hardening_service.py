@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncssh
@@ -129,7 +129,7 @@ class HardeningContext:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class HardeningService:

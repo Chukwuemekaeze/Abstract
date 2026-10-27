@@ -7,7 +7,7 @@ enter Python. user_id is never read from the client: it always comes from
 current_user.id (server side session).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID  # noqa: F401  (server_id path param type is resolved by FastAPI)
 
 import redis.asyncio as aioredis
@@ -15,7 +15,6 @@ from clerk_backend_api import Clerk
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.clerk import get_clerk_client
 from app.db import get_db
@@ -74,8 +73,8 @@ from app.services.ssh_service import (
     HostKeyMismatch,
     KeyInstallVerificationFailed,
     ProbeError,
-    SSHService,
     SshHardeningFailed,
+    SSHService,
 )
 
 router = APIRouter(prefix="/api/servers", tags=["servers"])
@@ -321,7 +320,7 @@ async def install_key(
         raise HTTPException(502, str(exc)) from exc
 
     server.status = "verified"
-    server.verified_at = datetime.now(timezone.utc)
+    server.verified_at = datetime.now(UTC)
     server.key_installed = True
     server.password_auth_disabled = disable_password_auth_from_client
     server.root_password_is_managed = password_is_managed
@@ -555,7 +554,7 @@ async def reregister_complete(
 
         # Reset the facts a rebuild invalidated: verified but unhardened, root again.
         server.status = "verified"
-        server.verified_at = datetime.now(timezone.utc)
+        server.verified_at = datetime.now(UTC)
         server.username = "root"
         server.sudo_user_name = None
         server.key_installed = True

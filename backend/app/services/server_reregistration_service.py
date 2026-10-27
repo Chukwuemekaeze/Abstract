@@ -327,7 +327,7 @@ async def _drive_pty_change(
                 chunk = await asyncio.wait_for(
                     process.stdout.read(1024), timeout=_PROMPT_TIMEOUT
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if chunk == "":
                 break  # EOF: shell closed.
@@ -530,7 +530,7 @@ async def run_exchange_and_verify(
 
     try:
         return await asyncio.wait_for(_attempt_loop(), timeout=_OVERALL_DEADLINE)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise _change_incomplete() from exc
 
 

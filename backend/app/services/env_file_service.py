@@ -8,7 +8,7 @@ or plaintext.
 """
 
 import posixpath
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -20,20 +20,20 @@ from app.schemas.env import validate_env_file_path
 from app.services.key_provider import KeyProvider
 
 __all__ = [
-    "EnvFileServiceError",
-    "EnvFilePathInvalid",
+    "DotenvParseError",
     "EnvFileAlreadyExists",
     "EnvFileNotFound",
-    "DotenvParseError",
-    "parse_dotenv",
-    "validate_path_within_clone",
+    "EnvFilePathInvalid",
+    "EnvFileServiceError",
     "create_env_file",
-    "update_env_file",
     "delete_env_file",
-    "list_env_files",
+    "get_decrypted_variables",
     "get_env_file",
     "get_env_file_keys",
-    "get_decrypted_variables",
+    "list_env_files",
+    "parse_dotenv",
+    "update_env_file",
+    "validate_path_within_clone",
 ]
 
 
@@ -192,7 +192,7 @@ async def update_env_file(
                 )
             ).all()
         }
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for key, value in set_variables_from_client.items():
             encrypted = await key_provider.encrypt(value.encode())
             var = existing_by_key.get(key)
@@ -210,7 +210,7 @@ async def update_env_file(
                     )
                 )
 
-    env_file.updated_at = datetime.now(timezone.utc)
+    env_file.updated_at = datetime.now(UTC)
     await db.flush()
     # Key names and counts only; values are never logged (see module docstring).
     logger.info(

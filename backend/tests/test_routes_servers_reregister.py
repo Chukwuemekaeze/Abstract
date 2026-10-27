@@ -8,7 +8,6 @@ TEST_DATABASE_URL is not set.
 
 import os
 
-import pytest
 from sqlalchemy import select
 
 from app.clerk import get_clerk_client
@@ -20,7 +19,6 @@ from app.services.server_reregistration_service import (
     AccessResult,
     ReregistrationError,
 )
-
 from tests.conftest import requires_db
 
 pytestmark = requires_db

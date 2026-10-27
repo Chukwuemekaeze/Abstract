@@ -6,8 +6,7 @@ recording a failed run without superseding, the partial unique index invariant,
 the list/detail endpoints, the rollback flow and its rejections, and the
 per-project operation lock (409 on concurrent operations)."""
 
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -88,7 +87,7 @@ async def seed_run(
 ):
     """Insert a project_runs row with a deterministic created_at so ordering is
     stable within a test."""
-    base = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 7, 1, tzinfo=UTC)
     ts = base + timedelta(minutes=created_offset)
     run = ProjectRun(
         project_id=project_id,

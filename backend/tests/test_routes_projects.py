@@ -4,7 +4,7 @@ DB backed (TEST_DATABASE_URL). SSH, GitHub, and the Clerk token fetch are
 mocked at the boundary; no network, no real VPS, no real GitHub account.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -106,7 +106,7 @@ async def _seed_project(db_session, user_id, server, *, slug="seeded", repo_id=R
         github_repo_full_name=REPO_FULL_NAME,
         github_repo_id=repo_id,
         clone_path="/home/deploy/anibantsdotNG",
-        cloned_at=datetime.now(timezone.utc),
+        cloned_at=datetime.now(UTC),
     )
     db_session.add(project)
     await db_session.flush()
@@ -212,7 +212,7 @@ async def test_create_rate_limited_returns_429(
 ):
     _conn, github, _set_conn = project_env
     github.add_deploy_key = mocker.AsyncMock(
-        side_effect=GithubRateLimited(datetime.now(timezone.utc))
+        side_effect=GithubRateLimited(datetime.now(UTC))
     )
     server = await _make_server(db_session, test_user.id)
     resp = await client.post(
@@ -263,7 +263,7 @@ async def test_github_repos_proxies_through(client, project_env):
             id=1,
             full_name="me/repo",
             name="repo",
-            pushed_at=datetime.now(timezone.utc),
+            pushed_at=datetime.now(UTC),
             private=True,
         )
     ]

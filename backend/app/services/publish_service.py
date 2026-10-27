@@ -13,7 +13,7 @@ The DNS pre-check happens before any VPS mutation so the common failure mode
 import asyncio
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncssh
 import dns.exception
@@ -25,22 +25,22 @@ from app.logging_config import logger
 from app.models import Project, Server, User
 
 __all__ = [
-    "PublishServiceError",
-    "AppNotRunning",
     "AlreadyPublished",
-    "NginxNotInstalled",
+    "AppNotRunning",
+    "CertbotFailed",
     "DomainAlreadyUsed",
-    "PortAlreadyUsed",
     "DomainDoesNotResolve",
     "NginxConfigInvalid",
-    "CertbotFailed",
+    "NginxNotInstalled",
     "NothingListening",
+    "PortAlreadyUsed",
+    "PublishServiceError",
     "PublishVerificationFailed",
-    "resolve_domain_dns",
     "build_nginx_config",
     "check_domain_and_port_available",
-    "publish_project",
     "cleanup_publish",
+    "publish_project",
+    "resolve_domain_dns",
 ]
 
 _TIMEOUT_CHECK = 30
@@ -387,7 +387,7 @@ async def publish_project(
         raise
 
     # -- 9. Mark published ------------------------------------------------------
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     project.domain = domain_from_client
     project.internal_port = internal_port_from_client
     project.published_at = now

@@ -1,7 +1,7 @@
 """Route tests for POST /api/projects/{id}/publish. DB backed; DNS and SSH
 are mocked at the service boundary."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -99,7 +99,7 @@ async def test_publish_already_published_returns_409(
         runtime_status="running",
         domain="live.example.com",
         internal_port=3000,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
     resp = await client.post(f"/api/projects/{project.id}/publish", json=BODY)
     assert resp.status_code == 409
@@ -127,7 +127,7 @@ async def test_publish_domain_conflict_returns_409(
         runtime_status="running",
         domain=DOMAIN,
         internal_port=3000,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
     resp = await client.post(f"/api/projects/{project.id}/publish", json=BODY)
     assert resp.status_code == 409

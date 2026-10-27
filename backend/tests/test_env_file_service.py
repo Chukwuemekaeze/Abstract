@@ -2,6 +2,7 @@
 rest, upsert/remove semantics, and cascade deletes."""
 
 import pytest
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.models import ProjectEnvFile, ProjectEnvVar
@@ -9,6 +10,7 @@ from app.services.env_file_service import (
     DotenvParseError,
     EnvFileAlreadyExists,
     EnvFileNotFound,
+    EnvFilePathInvalid,
     create_env_file,
     delete_env_file,
     get_decrypted_variables,
@@ -18,13 +20,10 @@ from app.services.env_file_service import (
     parse_dotenv,
     update_env_file,
     validate_path_within_clone,
-    EnvFilePathInvalid,
 )
 from app.services.key_provider import get_key_provider
-from sqlalchemy import select
 from tests.conftest import requires_db
 from tests.run_publish_mocks import CLONE_PATH, make_server, seed_project
-
 
 # -- parse_dotenv (no DB) -----------------------------------------------------
 

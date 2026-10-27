@@ -123,10 +123,10 @@ def setup_logging(level: str = "INFO", fmt: str = "pretty") -> None:
 
 
 __all__ = [
-    "logger",
-    "setup_logging",
     "bind_request_id",
     "bind_user_id",
+    "logger",
     "request_id_var",
+    "setup_logging",
     "user_id_var",
 ]
