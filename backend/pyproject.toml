@@ -45,3 +45,7 @@ testpaths = ["tests"]
 markers = [
     "integration: needs a real Postgres via TEST_DATABASE_URL (auto-applied in tests/conftest.py)",
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares dependencies and query params as call defaults by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
