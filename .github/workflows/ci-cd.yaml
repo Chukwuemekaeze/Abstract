@@ -1,0 +1,6 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - ci/github-actions-pipeline
