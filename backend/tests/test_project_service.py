@@ -68,20 +68,20 @@ async def _call(db_session, test_user, server, mocker, conn=None, github=None, *
         "app.services.project_service.get_github_oauth_token",
         mocker.AsyncMock(return_value="gho_test_token"),
     )
-    defaults = dict(
-        name_from_client="Anibants",
-        server_id_from_client=server.id,
-        github_repo_id_from_client=REPO_ID,
-        github_repo_full_name_from_client=REPO_FULL_NAME,
-        current_user=test_user,
-        session_id=TEST_SESSION_ID,
-        db=db_session,
-        ssh=make_ssh(mocker, conn),
-        redis=FakeRedis(),
-        key_provider=get_key_provider(get_settings()),
-        clerk=mocker.MagicMock(),
-        github=github,
-    )
+    defaults = {
+        "name_from_client": "Anibants",
+        "server_id_from_client": server.id,
+        "github_repo_id_from_client": REPO_ID,
+        "github_repo_full_name_from_client": REPO_FULL_NAME,
+        "current_user": test_user,
+        "session_id": TEST_SESSION_ID,
+        "db": db_session,
+        "ssh": make_ssh(mocker, conn),
+        "redis": FakeRedis(),
+        "key_provider": get_key_provider(get_settings()),
+        "clerk": mocker.MagicMock(),
+        "github": github,
+    }
     defaults.update(kw)
     return await create_project(**defaults), conn, github
 

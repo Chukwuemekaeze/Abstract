@@ -42,12 +42,12 @@ from tests.run_publish_mocks import (
 
 
 def fake_project(**overrides):
-    defaults = dict(
-        id=uuid4(),
-        clone_path=CLONE_PATH,
-        compose_file_path=None,
-        runtime_status="never_started",
-    )
+    defaults = {
+        "id": uuid4(),
+        "clone_path": CLONE_PATH,
+        "compose_file_path": None,
+        "runtime_status": "never_started",
+    }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
