@@ -178,3 +178,90 @@ jobs:
       - name: Audit frontend dependencies
         working-directory: frontend
         run: npm audit
+
+  build:
+    needs: [lint, unit-test, integration-test, security-scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      BACKEND_IMAGE: ghcr.io/chukwuemekaeze/abstract/backend
+      FRONTEND_IMAGE: ghcr.io/chukwuemekaeze/abstract/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Backend: build, scan, push only if the scan passes
+      - name: Backend image tags
+        id: backend-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=ref,event=branch
+
+      - name: Build backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          load: true
+          tags: ${{ steps.backend-meta.outputs.tags }}
+          labels: ${{ steps.backend-meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      # --ignore-unfixed: the python:3.12-slim (Debian) base carries OS CVEs with
+      # no released fix; only findings that have a fix fail the build.
+      - name: Scan backend image
+        run: >-
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+          -v "$PWD/.trivyignore:/.trivyignore:ro"
+          aquasec/trivy:0.76.1 image --exit-code 1 --ignore-unfixed --ignorefile /.trivyignore
+          ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+
+      - name: Push backend image
+        run: docker push --all-tags ${{ env.BACKEND_IMAGE }}
+
+      # Frontend: build, scan, push only if the scan passes
+      - name: Frontend image tags
+        id: frontend-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=ref,event=branch
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          load: true
+          tags: ${{ steps.frontend-meta.outputs.tags }}
+          labels: ${{ steps.frontend-meta.outputs.labels }}
+          build-args: |
+            VITE_CLERK_PUBLISHABLE_KEY=${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: Scan frontend image
+        run: >-
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+          -v "$PWD/.trivyignore:/.trivyignore:ro"
+          aquasec/trivy:0.76.1 image --exit-code 1 --ignorefile /.trivyignore
+          ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+
+      - name: Push frontend image
+        run: docker push --all-tags ${{ env.FRONTEND_IMAGE }}
