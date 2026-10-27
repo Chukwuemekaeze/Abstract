@@ -134,3 +134,47 @@ jobs:
       - name: Run backend integration tests
         working-directory: backend
         run: uv run pytest -m integration
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history, so the secret scan sees every commit, not just the latest.
+          fetch-depth: 0
+
+      # Secrets: gitleaks over the whole git history
+      - name: Scan for committed secrets
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact --verbose
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # Static analysis: semgrep over backend and frontend source
+      - name: Static analysis
+        run: >-
+          uvx semgrep@1.182.0 scan
+          --config p/python --config p/typescript --config p/react
+          --metrics=off --error
+          backend/app frontend/src
+
+      # Dependencies: every locked package, dev extras included, any severity fails
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: |
+          uv export --frozen --all-extras --no-emit-project --format requirements-txt -o requirements.txt
+          uvx pip-audit@2.10.1 --strict --require-hashes --disable-pip -r requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.22.1"
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit
