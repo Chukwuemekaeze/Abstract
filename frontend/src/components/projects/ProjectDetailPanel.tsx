@@ -69,9 +69,7 @@ export function ProjectDetailPanel({
   // Keep showing the last project while the drawer animates closed, so the body
   // doesn't blank out mid-slide. Only advances when a project is present.
   const [displayed, setDisplayed] = useState<Project | null>(project)
-  useEffect(() => {
-    if (project) setDisplayed(project)
-  }, [project])
+  if (project && project !== displayed) setDisplayed(project)
 
   const open = project != null
 
