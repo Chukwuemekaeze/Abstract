@@ -87,4 +87,4 @@ if _settings.sentry_dsn:
     # Only exposed when Sentry is configured: forces an error to verify the pipeline.
     @app.get("/api/sentry-debug")
     async def trigger_error():
-        division_by_zero = 1 / 0
+        1 / 0  # noqa: B018

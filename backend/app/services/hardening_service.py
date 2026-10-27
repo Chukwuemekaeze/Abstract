@@ -243,16 +243,14 @@ class HardeningService:
         rollback.
         """
         failures: list[str] = []
-        if created_sudoers:
-            if not await self._run_cleanup(
-                conn, server, f"rm -f /etc/sudoers.d/{shlex.quote(name)}", captured
-            ):
-                failures.append(f"sudoers file /etc/sudoers.d/{name}")
-        if created_user:
-            if not await self._run_cleanup(
-                conn, server, f"deluser --remove-home {shlex.quote(name)}", captured
-            ):
-                failures.append(f"user account and home directory for {name}")
+        if created_sudoers and not await self._run_cleanup(
+            conn, server, f"rm -f /etc/sudoers.d/{shlex.quote(name)}", captured
+        ):
+            failures.append(f"sudoers file /etc/sudoers.d/{name}")
+        if created_user and not await self._run_cleanup(
+            conn, server, f"deluser --remove-home {shlex.quote(name)}", captured
+        ):
+            failures.append(f"user account and home directory for {name}")
         if failures:
             captured.append(
                 "Cleanup incomplete after failure. Abstract could not remove the "

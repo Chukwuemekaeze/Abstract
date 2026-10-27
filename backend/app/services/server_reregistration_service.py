@@ -621,7 +621,7 @@ async def purge_server_projects(
                 await github.delete_deploy_key(
                     token, project.github_repo_full_name, deploy_key_id
                 )
-            except Exception as exc:  # best-effort: never block recovery on GitHub
+            except Exception as exc:  # noqa: BLE001 - best-effort: never block recovery on GitHub
                 logger.warning(
                     "Re-registration: could not revoke GitHub deploy key for "
                     "project %s (%s): %s",

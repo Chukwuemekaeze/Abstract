@@ -44,7 +44,7 @@ def validate_env_file_path(path: str) -> str:
     if ".." in path.split("/"):
         raise ValueError("path must not contain '..' segments")
     normalized = posixpath.normpath(path)
-    if normalized.startswith("..") or normalized.startswith("/"):
+    if normalized.startswith(("..", "/")):
         raise ValueError("path must resolve inside the project directory")
     return path
 

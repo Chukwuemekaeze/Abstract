@@ -225,7 +225,7 @@ async def cleanup_publish(
                     result.exit_status,
                     project_slug,
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Publish cleanup step '{}' failed for project {}: {}",
                 label,
