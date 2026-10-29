@@ -79,3 +79,9 @@ PROD_CONTAINERS.md
 
 # WSL/Windows metadata sidecar files
 *:Zone.Identifier
+# OpenTofu: provider downloads, state (may hold IPs/secrets), variable files
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+infra/.envrc
