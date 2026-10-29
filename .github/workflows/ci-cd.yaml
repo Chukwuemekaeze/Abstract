@@ -177,7 +177,9 @@ jobs:
 
       - name: Audit frontend dependencies
         working-directory: frontend
-        run: npm audit
+        # Production deps only: dev tooling (shadcn CLI, Vite, Vitest, ESLint)
+        # never ships to users.
+        run: npm audit --omit=dev
 
   build:
     needs: [lint, unit-test, integration-test, security-scan]
