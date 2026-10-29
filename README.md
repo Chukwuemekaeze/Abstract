@@ -185,6 +185,37 @@ docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head
 docker compose -f docker-compose.prod.yml up -d
 ```
 
+## Infrastructure (OpenTofu)
+
+`infra/` provisions the `abstract-test` server on DigitalOcean with
+[OpenTofu](https://opentofu.org):
+
+- `provider.tf`: everything provider-specific (the DigitalOcean provider, the
+  uploaded SSH public key, the droplet and its `server_ip` output). Switching
+  providers means replacing this file.
+- `variables.tf`: provider-agnostic settings (`username`, `ssh_public_key_path`).
+- `backend.tf`: state is stored in a Cloudflare R2 bucket (S3-compatible) with a
+  lock file, so the laptop and CI share one state and can't apply at the same time.
+
+Credentials come from the environment, never from files in the repo. Locally they
+live in `infra/.envrc` (gitignored, loaded by [direnv](https://direnv.net)):
+
+```bash
+export DIGITALOCEAN_TOKEN="..."      # DigitalOcean API token
+export AWS_ACCESS_KEY_ID="..."       # R2 API token access key
+export AWS_SECRET_ACCESS_KEY="..."   # R2 API token secret
+export AWS_ENDPOINT_URL_S3="https://<account_id>.r2.cloudflarestorage.com"
+```
+
+Run `direnv allow` after creating or editing it, then from `infra/`:
+
+```bash
+tofu init     # downloads the provider, connects to the R2 state
+tofu plan     # shows what would change, changes nothing
+tofu apply    # creates or updates the server
+tofu output server_ip
+```
+
 ## Smoke test (end to end)
 
 1. Start the backend (port 8000) and the frontend (port 5173).
