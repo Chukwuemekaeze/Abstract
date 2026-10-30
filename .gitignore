@@ -85,3 +85,4 @@ infra/*.tfstate
 infra/*.tfstate.*
 infra/*.tfvars
 infra/.envrc
+infra/ansible/inventory.ini

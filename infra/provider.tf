@@ -4,6 +4,11 @@ terraform {
       source  = "digitalocean/digitalocean"
       version = "~> 2.106"
     }
+    # Writes the Ansible inventory (inventory.tf); not provider-specific.
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.9"
+    }
   }
 }
 
@@ -24,6 +29,11 @@ resource "digitalocean_droplet" "abstract_test" {
   ssh_keys = [digitalocean_ssh_key.abstract_test.fingerprint]
 }
 
+# Provider-neutral name for the server's IP; other files use local.server_ip.
+locals {
+  server_ip = digitalocean_droplet.abstract_test.ipv4_address
+}
+
 output "server_ip" {
-  value = digitalocean_droplet.abstract_test.ipv4_address
+  value = local.server_ip
 }
