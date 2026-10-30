@@ -216,6 +216,30 @@ tofu apply    # creates or updates the server
 tofu output server_ip
 ```
 
+`tofu apply` also writes `infra/ansible/inventory.ini` (gitignored) with the
+server's IP, so Ansible always targets the current server.
+
+### Server setup (Ansible)
+
+`infra/ansible/playbook.yml` configures the server: a non-root user with
+passwordless sudo and the test SSH key, system updates (never reboots), Docker
+from Docker's apt repository, Nginx, Certbot (snap), UFW allowing only SSH, HTTP
+and HTTPS, and finally an SSH lockdown (no root login, no password login).
+Ansible logs in as that user (`ansible.cfg`). The user's password is set from a
+yescrypt hash, so add it to `infra/.envrc`:
+
+```bash
+export EMEKA_PASSWORD_HASH='$y$...'   # from: mkpasswd -m yescrypt
+```
+
+Then, from `infra/ansible/`:
+
+```bash
+ansible-playbook playbook.yml
+```
+
+Install Ansible with `uv tool install ansible-core --with ansible`.
+
 ## Smoke test (end to end)
 
 1. Start the backend (port 8000) and the frontend (port 5173).
