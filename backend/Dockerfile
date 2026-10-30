@@ -38,9 +38,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# The base image's system pip carries known CVEs. The app never uses it (deps
-# live in the uv-built venv), but keep it on a patched version.
-RUN pip install --no-cache-dir --upgrade pip
+# Remove the base image's system pip: the app never uses it (deps live in the
+# uv-built venv), and its bundled copies of urllib3, setuptools and msgpack
+# keep picking up CVEs.
+RUN pip uninstall -y pip
 
 RUN useradd --uid 10001 --create-home appuser
 
