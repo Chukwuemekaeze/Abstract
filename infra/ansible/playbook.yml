@@ -23,3 +23,40 @@
       ansible.posix.authorized_key:
         user: "{{ username }}"
         key: "{{ lookup('ansible.builtin.file', '~/.ssh/abstract-test.pub') }}"
+
+    # Never reboots: kernel updates wait for a manual reboot (no downtime).
+    - name: Install all available package updates
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+
+    - name: Add Docker's apt repository
+      ansible.builtin.deb822_repository:
+        name: docker
+        types: deb
+        uris: https://download.docker.com/linux/ubuntu
+        suites: "{{ ansible_facts['distribution_release'] }}"
+        components: stable
+        signed_by: https://download.docker.com/linux/ubuntu/gpg
+
+    - name: Install Docker Engine and the Compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: true
+
+    - name: Start Docker now and on every boot
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Let the user run Docker without sudo
+      ansible.builtin.user:
+        name: "{{ username }}"
+        groups: docker
+        append: true
