@@ -60,3 +60,24 @@
         name: "{{ username }}"
         groups: docker
         append: true
+
+    - name: Install Nginx
+      ansible.builtin.apt:
+        name: nginx
+
+    - name: Start Nginx now and on every boot
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Install Certbot (snap, as Certbot recommends)
+      community.general.snap:
+        name: certbot
+        classic: true
+
+    - name: Make the certbot command available on the PATH
+      ansible.builtin.file:
+        src: /snap/bin/certbot
+        dest: /usr/bin/certbot
+        state: link
