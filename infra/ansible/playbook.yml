@@ -1,0 +1,25 @@
+- name: Set up the abstract-test server
+  hosts: abstract_test
+  vars:
+    username: emeka
+    password_hash: "{{ lookup('ansible.builtin.env', 'EMEKA_PASSWORD_HASH') }}"
+
+  tasks:
+    - name: Fail early if the password hash is missing
+      ansible.builtin.assert:
+        that: password_hash | length > 0
+        fail_msg: EMEKA_PASSWORD_HASH is not set (infra/.envrc or the CI secret).
+
+    - name: Create the non-root user
+      ansible.builtin.user:
+        name: "{{ username }}"
+        password: "{{ password_hash }}"
+        update_password: always
+        shell: /bin/bash
+        groups: sudo
+        append: true
+
+    - name: Let the user log in with the test SSH key
+      ansible.posix.authorized_key:
+        user: "{{ username }}"
+        key: "{{ lookup('ansible.builtin.file', '~/.ssh/abstract-test.pub') }}"
