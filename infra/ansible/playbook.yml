@@ -81,3 +81,22 @@
         src: /snap/bin/certbot
         dest: /usr/bin/certbot
         state: link
+
+    # SSH is allowed before the firewall turns on, so the run can't lock itself out.
+    - name: Allow SSH through the firewall
+      community.general.ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: Allow HTTP and HTTPS through the firewall
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["80", "443"]
+
+    - name: Turn the firewall on, blocking everything else incoming
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
