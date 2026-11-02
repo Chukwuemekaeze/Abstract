@@ -162,8 +162,9 @@ port 8000, so there is no CORS configuration to worry about during development.
 
 ## Production containers
 
-Production runs from containers built on the box from cloned source (no
-registry, no prebuilt images):
+Production runs images built, scanned and pushed to GHCR by CI
+(`ghcr.io/chukwuemekaeze/abstract/backend` and `.../frontend`, tagged with the
+commit SHA); nothing is built on the box:
 
 - `backend/Dockerfile`: the FastAPI backend image (uvicorn, single worker,
   non-root, no local system binaries). Published on loopback only; host Nginx
@@ -180,7 +181,8 @@ nothing is baked into images. Migrations run as an explicit step from the
 backend image before the stack comes up:
 
 ```bash
-docker compose -f docker-compose.prod.yml build
+export IMAGE_TAG=<commit-sha>
+docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head
 docker compose -f docker-compose.prod.yml up -d
 ```
