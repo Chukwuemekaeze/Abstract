@@ -189,11 +189,11 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## Infrastructure (OpenTofu)
 
-`infra/` provisions the `abstract-test` server on DigitalOcean with
+`infra/` manages the production server on Contabo with
 [OpenTofu](https://opentofu.org):
 
-- `provider.tf`: everything provider-specific (the DigitalOcean provider, the
-  uploaded SSH public key, the droplet and its `server_ip` output). Switching
+- `provider.tf`: everything provider-specific (the Contabo provider, the
+  uploaded SSH public key, the adopted VPS and its `server_ip` output). Switching
   providers means replacing this file.
 - `variables.tf`: provider-agnostic settings (`username`, `ssh_public_key_path`).
 - `backend.tf`: state is stored in a Cloudflare R2 bucket (S3-compatible) with a
@@ -203,7 +203,10 @@ Credentials come from the environment, never from files in the repo. Locally the
 live in `infra/.envrc` (gitignored, loaded by [direnv](https://direnv.net)):
 
 ```bash
-export DIGITALOCEAN_TOKEN="..."      # DigitalOcean API token
+export CNTB_OAUTH2_CLIENT_ID="..."      # Contabo API credentials
+export CNTB_OAUTH2_CLIENT_SECRET="..."
+export CNTB_OAUTH2_USER="..."
+export CNTB_OAUTH2_PASS="..."
 export AWS_ACCESS_KEY_ID="..."       # R2 API token access key
 export AWS_SECRET_ACCESS_KEY="..."   # R2 API token secret
 export AWS_ENDPOINT_URL_S3="https://<account_id>.r2.cloudflarestorage.com"
