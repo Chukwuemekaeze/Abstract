@@ -3,7 +3,7 @@ name: ci
 on:
   push:
     branches:
-      - ci/github-actions-pipeline
+      - "**"
 
 jobs:
   lint:
@@ -266,53 +266,3 @@ jobs:
 
       - name: Push frontend image
         run: docker push --all-tags ${{ env.FRONTEND_IMAGE }}
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ github.sha }}
-      APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
-      CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
-      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
-      BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # Server IP comes from the shared OpenTofu state in R2.
-      - name: Set up OpenTofu
-        uses: opentofu/setup-opentofu@v2
-        with:
-          tofu_wrapper: false
-
-      - name: Write the Ansible inventory from OpenTofu state
-        working-directory: infra
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL_S3: ${{ secrets.R2_ENDPOINT }}
-        run: |
-          tofu init -input=false
-          ip=$(tofu output -raw server_ip)
-          printf '[abstract]\n%s\n' "$ip" > ansible/inventory.ini
-          echo "SERVER_IP=$ip" >> "$GITHUB_ENV"
-
-      - name: Set up SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/abstract-prod
-          chmod 600 ~/.ssh/abstract-prod
-          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.2
-
-      - name: Install Ansible
-        run: uv tool install ansible-core --with ansible
-
-      - name: Deploy
-        working-directory: infra/ansible
-        run: ansible-playbook deploy.yml
