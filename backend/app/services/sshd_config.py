@@ -16,7 +16,8 @@ else in the app, so both ssh_service and hardening_service can import it.
 from __future__ import annotations
 
 import enum
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 # Reload sshd, trying the common service manager names in order. The final branch
 # exits nonzero with a clear marker so a runner that checks exit status raises.

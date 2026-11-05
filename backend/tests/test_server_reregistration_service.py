@@ -241,8 +241,10 @@ async def test_branch_b_kbdint_change_returns_generated(mocker):
 async def test_branch_b_pty_change_returns_generated(mocker):
     process = FakeProcess(
         [
-            "You are required to change your password immediately.\r\n"
-            "(current) UNIX password: ",
+            (
+                "You are required to change your password immediately.\r\n"
+                "(current) UNIX password: "
+            ),
             "\r\nNew password: ",
             "\r\nRetype new password: ",
             "\r\npasswd: password updated successfully\r\n",

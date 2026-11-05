@@ -10,7 +10,7 @@ is never logged here.
 """
 
 import shlex
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncssh
@@ -61,7 +61,7 @@ async def record_running_run(
     Both happen in the caller's transaction so the one-running-row invariant
     holds atomically.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         update(ProjectRun)
         .where(ProjectRun.project_id == project_id, ProjectRun.status == "running")
@@ -90,7 +90,7 @@ async def record_failed_run(
 ) -> ProjectRun:
     """Insert a failed row. The previous running row is left untouched: a failed
     attempt does not change what is actually deployed."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     run = ProjectRun(
         project_id=project_id,
         git_commit_sha=commit_sha,

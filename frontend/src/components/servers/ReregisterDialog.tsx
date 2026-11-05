@@ -83,16 +83,6 @@ function ReregisterDialogOpen({ serverId }: { serverId: string }) {
     },
   })
 
-  // Kick off the probe exactly once when the dialog opens.
-  const probeStarted = useRef(false)
-  useEffect(() => {
-    if (probeStarted.current) return
-    probeStarted.current = true
-    void runProbe()
-    // runProbe only touches local/mutation state; safe to omit from deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   const runProbe = async () => {
     setStep('probing')
     setError(null)
@@ -106,6 +96,16 @@ function ReregisterDialogOpen({ serverId }: { serverId: string }) {
       setStep('failed')
     }
   }
+
+  // Kick off the probe exactly once when the dialog opens.
+  const probeStarted = useRef(false)
+  useEffect(() => {
+    if (probeStarted.current) return
+    probeStarted.current = true
+    void runProbe()
+    // runProbe only touches local/mutation state; safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const runComplete = async () => {
     setStep('submitting')

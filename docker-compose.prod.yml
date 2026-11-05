@@ -1,5 +1,6 @@
-# Production stack: backend + ephemeral Redis. Built from cloned source on the
-# box; no registry, no prebuilt images.
+# Production stack: backend + ephemeral Redis. The backend image is built and
+# scanned by CI and pulled from GHCR; IMAGE_TAG (the commit SHA) picks the
+# version, so nothing is built on the box.
 #
 # Not here on purpose:
 #   postgres  - external managed database (Neon, direct connection),
@@ -18,7 +19,7 @@
 
 services:
   backend:
-    build: ./backend
+    image: ghcr.io/chukwuemekaeze/abstract/backend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA to deploy}
     env_file: ./backend/.env
     environment:
       # Service wiring belongs to the compose file; this overrides any stale

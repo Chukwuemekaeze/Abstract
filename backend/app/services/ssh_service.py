@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncssh
@@ -30,7 +30,6 @@ from app.services.sshd_config import (
     SshdDirectiveResult,
     apply_sshd_directive,
 )
-
 
 # Connection pool. Maps (user_id, server_id) -> (connection, last_used_at, username).
 # The username is recorded so a pooled connection whose login identity no longer
@@ -76,7 +75,7 @@ class HostKeyMismatch(Exception):
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _known_hosts_from(host: str, host_key: bytes) -> asyncssh.SSHKnownHosts:

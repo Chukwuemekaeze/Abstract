@@ -221,7 +221,6 @@ async def test_install_key_forced_change_writes_ahead_then_clears(
         # the generated one, not the user's.
         seen["bootstrap_at_install"] = kwargs["server"].bootstrap_password
         seen["password"] = kwargs["password_from_client"]
-        return None
 
     mock_ssh.install_key.side_effect = _capture
 

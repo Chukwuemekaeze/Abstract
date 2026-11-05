@@ -5,7 +5,7 @@ httpx.Response objects, which keeps real Link header parsing and status
 handling in play.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -188,4 +188,4 @@ async def test_rate_limit_raises_with_parsed_reset(github_with):
     )
     with pytest.raises(GithubRateLimited) as exc_info:
         await service.list_admin_repos(TOKEN)
-    assert exc_info.value.reset_at == datetime.fromtimestamp(reset, tz=timezone.utc)
+    assert exc_info.value.reset_at == datetime.fromtimestamp(reset, tz=UTC)

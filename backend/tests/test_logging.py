@@ -15,10 +15,10 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.logging_config import logger, setup_logging
-from app.utils.redaction import redact_secrets
 from app.middleware.logging import RequestLoggingMiddleware
 from app.services.github_service import GithubService
 from app.services.server_reregistration_service import generate_bootstrap_password
+from app.utils.redaction import redact_secrets
 
 
 @contextlib.contextmanager

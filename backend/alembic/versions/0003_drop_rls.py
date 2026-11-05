@@ -16,14 +16,14 @@ Revises: 0002_clerk_user_id
 Create Date: 2026-06-30
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "0003_drop_rls"
-down_revision: Union[str, None] = "0002_clerk_user_id"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0002_clerk_user_id"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _TABLES = ("users", "servers", "app_ssh_keys")
 

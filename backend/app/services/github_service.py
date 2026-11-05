@@ -5,7 +5,7 @@ never cached by us). Deploy keys are registered read-only and scoped to a
 single repo, which is the whole point of the per-project key model.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -51,9 +51,9 @@ def _check_rate_limit(response: httpx.Response) -> None:
     ):
         reset_raw = response.headers.get("X-RateLimit-Reset", "0")
         try:
-            reset_at = datetime.fromtimestamp(int(reset_raw), tz=timezone.utc)
+            reset_at = datetime.fromtimestamp(int(reset_raw), tz=UTC)
         except ValueError:
-            reset_at = datetime.now(timezone.utc)
+            reset_at = datetime.now(UTC)
         logger.warning("GitHub rate limit exceeded; resets at {}", reset_at.isoformat())
         raise GithubRateLimited(reset_at)
 

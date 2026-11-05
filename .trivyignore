@@ -1,0 +1,5 @@
+# Trivy findings accepted on purpose.
+
+# Clerk publishable key (pk_test_/pk_live_) in the frontend bundle matches the
+# Stripe publishable key rule. It is public by design, not a leaked secret.
+stripe-publishable-token

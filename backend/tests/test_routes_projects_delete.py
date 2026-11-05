@@ -7,7 +7,7 @@ side effects (row gone on success, row intact and active_operation cleared on
 any failure).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -81,7 +81,7 @@ async def _published_running_project(db_session, user):
         runtime_status="running",
         domain="app.example.com",
         internal_port=3000,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
 
 

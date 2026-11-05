@@ -33,10 +33,17 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.12-slim
 
-# TLS trust store for asyncpg (ssl.create_default_context) and httpx.
+# TLS trust store for asyncpg (ssl.create_default_context) and httpx. The upgrade
+# applies OS security fixes released since the base image was last published.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Remove the base image's system pip: the app never uses it (deps live in the
+# uv-built venv), and its bundled copies of urllib3, setuptools and msgpack
+# keep picking up CVEs.
+RUN pip uninstall -y pip
 
 RUN useradd --uid 10001 --create-home appuser
 

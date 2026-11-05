@@ -42,7 +42,7 @@ Clerk user. See [Deleting your account](#deleting-your-account).
 
 ## Prerequisites
 
-- Node 20+
+- Node 24.22.1+ (patched for the October 2026 Node.js security release)
 - Python 3.12
 - Docker (for the dev Redis and the local dev Postgres)
 
@@ -126,6 +126,15 @@ TEST_DATABASE_URL=postgresql+asyncpg://deploy:deploy@localhost:5432/deploy_pipel
 Tests that do not need a database (key provider, mocked SSH service) run even
 without `TEST_DATABASE_URL` set; the DB backed ones skip in that case.
 
+DB backed tests are automatically marked `integration` (see `tests/conftest.py`),
+so either group can be run on its own:
+
+```bash
+.venv/bin/python -m pytest -m "not integration"   # unit tests only, no DB needed
+TEST_DATABASE_URL=postgresql+asyncpg://deploy:deploy@localhost:5432/deploy_pipeline_test \
+  .venv/bin/python -m pytest -m integration       # DB backed tests only
+```
+
 ## Frontend setup
 
 From the `frontend/` directory:
@@ -153,8 +162,13 @@ port 8000, so there is no CORS configuration to worry about during development.
 
 ## Production containers
 
-Production runs from containers built on the box from cloned source (no
-registry, no prebuilt images):
+`.github/workflows/ci.yaml` runs on a push to any branch: lint, tests, security
+scans, then a build that pushes images to GHCR. `.github/workflows/deploy.yaml`
+deploys to production only after `ci` succeeds for a push to `main`.
+
+Production runs images built, scanned and pushed to GHCR by CI
+(`ghcr.io/chukwuemekaeze/abstract/backend` and `.../frontend`, tagged with the
+commit SHA); nothing is built on the box:
 
 - `backend/Dockerfile`: the FastAPI backend image (uvicorn, single worker,
   non-root, no local system binaries). Published on loopback only; host Nginx
@@ -171,10 +185,69 @@ nothing is baked into images. Migrations run as an explicit step from the
 backend image before the stack comes up:
 
 ```bash
-docker compose -f docker-compose.prod.yml build
+export IMAGE_TAG=<commit-sha>
+docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+## Infrastructure (OpenTofu)
+
+`infra/` manages the production server on Contabo with
+[OpenTofu](https://opentofu.org):
+
+- `provider.tf`: everything provider-specific (the Contabo provider, the
+  uploaded SSH public key, the adopted VPS and its `server_ip` output). Switching
+  providers means replacing this file.
+- `variables.tf`: provider-agnostic settings (`username`, `ssh_public_key_path`).
+- `backend.tf`: state is stored in a Cloudflare R2 bucket (S3-compatible) with a
+  lock file, so the laptop and CI share one state and can't apply at the same time.
+
+Credentials come from the environment, never from files in the repo. Locally they
+live in `infra/.envrc` (gitignored, loaded by [direnv](https://direnv.net)):
+
+```bash
+export CNTB_OAUTH2_CLIENT_ID="..."      # Contabo API credentials
+export CNTB_OAUTH2_CLIENT_SECRET="..."
+export CNTB_OAUTH2_USER="..."
+export CNTB_OAUTH2_PASS="..."
+export AWS_ACCESS_KEY_ID="..."       # R2 API token access key
+export AWS_SECRET_ACCESS_KEY="..."   # R2 API token secret
+export AWS_ENDPOINT_URL_S3="https://<account_id>.r2.cloudflarestorage.com"
+```
+
+Run `direnv allow` after creating or editing it, then from `infra/`:
+
+```bash
+tofu init     # downloads the provider, connects to the R2 state
+tofu plan     # shows what would change, changes nothing
+tofu apply    # creates or updates the server
+tofu output server_ip
+```
+
+`tofu apply` also writes `infra/ansible/inventory.ini` (gitignored) with the
+server's IP, so Ansible always targets the current server.
+
+### Server setup (Ansible)
+
+`infra/ansible/playbook.yml` configures the server: a non-root user with
+passwordless sudo and the test SSH key, system updates (never reboots), Docker
+from Docker's apt repository, Nginx, Certbot (snap), UFW allowing only SSH, HTTP
+and HTTPS, and finally an SSH lockdown (no root login, no password login).
+Ansible logs in as that user (`ansible.cfg`). The user's password is set from a
+yescrypt hash, so add it to `infra/.envrc`:
+
+```bash
+export EMEKA_PASSWORD_HASH='$y$...'   # from: mkpasswd -m yescrypt
+```
+
+Then, from `infra/ansible/`:
+
+```bash
+ansible-playbook playbook.yml
+```
+
+Install Ansible with `uv tool install ansible-core --with ansible`.
 
 ## Smoke test (end to end)
 

@@ -20,7 +20,7 @@ import posixpath
 import shlex
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncssh
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,28 +31,28 @@ from app.services import env_file_service
 from app.services.key_provider import KeyProvider
 
 __all__ = [
+    "BUILD_OUTPUT_MAX_BYTES",
     "COMPOSE_FILE_CANDIDATES",
     "DANGEROUS_PORTS",
-    "RunServiceError",
+    "ComposeConfigInvalid",
     "ComposeFileNotFound",
-    "EnvFileKeyCollision",
     "ComposeUpFailed",
     "ContainerNotRunning",
-    "ComposeConfigInvalid",
-    "RollbackCheckoutFailed",
     "DetectedPort",
+    "EnvFileKeyCollision",
+    "RollbackCheckoutFailed",
     "RunResult",
-    "BUILD_OUTPUT_MAX_BYTES",
-    "truncate_build_output",
+    "RunServiceError",
     "detect_compose_file",
-    "write_env_files_to_vps",
-    "run_compose_up",
-    "verify_containers_running",
-    "rollback_checkout",
     "execute_run",
-    "start_project",
-    "refresh_status",
     "get_detected_ports",
+    "refresh_status",
+    "rollback_checkout",
+    "run_compose_up",
+    "start_project",
+    "truncate_build_output",
+    "verify_containers_running",
+    "write_env_files_to_vps",
 ]
 
 COMPOSE_FILE_CANDIDATES = [
@@ -540,7 +540,7 @@ async def execute_run(
             )
         raise ContainerNotRunning(truncate_build_output(combined))
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     project.runtime_status = "running"
     project.started_at = now
     project.updated_at = now
@@ -614,7 +614,7 @@ async def refresh_status(
 
     if project.runtime_status != new_status:
         project.runtime_status = new_status
-        project.updated_at = datetime.now(timezone.utc)
+        project.updated_at = datetime.now(UTC)
     return project
 
 

@@ -15,7 +15,7 @@ project files belong to the sudo user's own home.
 
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncssh
@@ -34,15 +34,15 @@ from app.services.ssh_service import SSHService
 from app.utils.slug import slugify
 
 __all__ = [
-    "ProjectServiceError",
-    "ServerNotEligible",
-    "DuplicateProject",
+    "CloneMissing",
     "ClonePathOccupied",
     "CloneVerificationFailed",
-    "CloneMissing",
+    "DuplicateProject",
+    "GithubTokenUnavailable",
+    "ProjectServiceError",
     "PullFailed",
     "PullResult",
-    "GithubTokenUnavailable",
+    "ServerNotEligible",
     "create_project",
     "pull_latest",
 ]
@@ -352,7 +352,7 @@ async def create_project(
             raise CloneVerificationFailed(clone_output)
 
         # -- 11. Mark cloned ---------------------------------------------------
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         project.cloned_at = now
         project.updated_at = now
     except Exception:
@@ -389,7 +389,7 @@ async def _cleanup_external_state(
     if state.github_key_id is not None:
         try:
             await github.delete_deploy_key(token, repo_full_name, state.github_key_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Cleanup failed: could not delete GitHub deploy key {} on {}: {}",
                 state.github_key_id,
@@ -400,7 +400,7 @@ async def _cleanup_external_state(
     if state.key_file_written:
         try:
             await _run(conn, f"rm -f ~/.ssh/{slug}-deploy")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Cleanup failed: could not remove deploy key file for {}: {}",
                 slug,
@@ -412,7 +412,7 @@ async def _cleanup_external_state(
             # Same idempotent removal the deletion path uses, so forward-cleanup
             # and delete stay identical.
             await _run(conn, ssh_config_removal_command(slug))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Cleanup failed: could not remove ssh config block for {}: {}",
                 slug,
@@ -422,7 +422,7 @@ async def _cleanup_external_state(
     if state.clone_started:
         try:
             await _run(conn, f"rm -rf {quoted_clone_path}", timeout=_TIMEOUT_CLONE)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Cleanup failed: could not remove clone directory {}: {}",
                 quoted_clone_path,
@@ -492,7 +492,7 @@ async def pull_latest(
         await _git(conn, quoted_clone_path, "rev-parse --short HEAD", _TIMEOUT_CHECK)
     ).strip()
 
-    project.updated_at = datetime.now(timezone.utc)
+    project.updated_at = datetime.now(UTC)
     return PullResult(
         before_commit=before_commit,
         after_commit=after_commit,

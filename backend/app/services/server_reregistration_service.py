@@ -327,7 +327,7 @@ async def _drive_pty_change(
                 chunk = await asyncio.wait_for(
                     process.stdout.read(1024), timeout=_PROMPT_TIMEOUT
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if chunk == "":
                 break  # EOF: shell closed.
@@ -530,7 +530,7 @@ async def run_exchange_and_verify(
 
     try:
         return await asyncio.wait_for(_attempt_loop(), timeout=_OVERALL_DEADLINE)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise _change_incomplete() from exc
 
 
@@ -621,7 +621,7 @@ async def purge_server_projects(
                 await github.delete_deploy_key(
                     token, project.github_repo_full_name, deploy_key_id
                 )
-            except Exception as exc:  # best-effort: never block recovery on GitHub
+            except Exception as exc:  # noqa: BLE001 - best-effort: never block recovery on GitHub
                 logger.warning(
                     "Re-registration: could not revoke GitHub deploy key for "
                     "project %s (%s): %s",

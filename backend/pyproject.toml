@@ -15,7 +15,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings",
     "python-dotenv",
-    "clerk-backend-api>=6.0,<7",
+    "clerk-backend-api>=7.0,<8",
     "loguru>=0.7,<1",
     "httpx",
     "dnspython>=2.8.0",
@@ -29,6 +29,7 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "pytest-mock",
+    "ruff>=0.17.2",
 ]
 
 [build-system]
@@ -41,3 +42,10 @@ packages = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: needs a real Postgres via TEST_DATABASE_URL (auto-applied in tests/conftest.py)",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares dependencies and query params as call defaults by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]

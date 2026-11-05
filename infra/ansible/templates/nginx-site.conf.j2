@@ -1,0 +1,47 @@
+# Managed by Ansible (infra/ansible/deploy.yml). Manual edits are overwritten.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ app_domain }} www.{{ app_domain }};
+
+    # Let's Encrypt HTTP challenges (first issue and every renewal).
+    location /.well-known/acme-challenge/ {
+        root {{ acme_root }};
+    }
+
+{% if has_cert %}
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{ app_domain }} www.{{ app_domain }};
+
+    ssl_certificate /etc/letsencrypt/live/{{ app_domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ app_domain }}/privkey.pem;
+{% endif %}
+
+    root {{ web_root }};
+    index index.html;
+
+    # Backend on loopback only. Deploy actions can run up to the backend's 900s
+    # SSH command timeout, so the proxy waits longer than that.
+    location /api {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1000s;
+        proxy_send_timeout 1000s;
+    }
+
+    # SPA fallback: client-side routes resolve to index.html.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

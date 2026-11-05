@@ -1,0 +1,183 @@
+- name: Deploy Abstract
+  hosts: abstract
+  vars:
+    app_user: emeka
+    app_dir: "/home/{{ app_user }}/abstract"
+    web_root: /var/www/abstractdeploy
+    acme_root: /var/www/letsencrypt
+    ghcr_user: chukwuemekaeze
+    frontend_image: ghcr.io/chukwuemekaeze/abstract/frontend
+    image_tag: "{{ lookup('ansible.builtin.env', 'IMAGE_TAG') }}"
+    app_domain: "{{ lookup('ansible.builtin.env', 'APP_DOMAIN') }}"
+    certbot_email: "{{ lookup('ansible.builtin.env', 'CERTBOT_EMAIL') }}"
+    ghcr_token: "{{ lookup('ansible.builtin.env', 'GHCR_READ_TOKEN') }}"
+    backend_env: "{{ lookup('ansible.builtin.env', 'BACKEND_ENV') }}"
+    compose: docker compose -f docker-compose.prod.yml
+
+  tasks:
+    - name: Fail early if a required setting is missing
+      ansible.builtin.assert:
+        that:
+          - image_tag | length > 0
+          - app_domain | length > 0
+          - ghcr_token | length > 0
+          - backend_env | length > 0
+        fail_msg: IMAGE_TAG, APP_DOMAIN, GHCR_READ_TOKEN and BACKEND_ENV must all be set.
+
+    # App files
+
+    - name: Create the app folder
+      ansible.builtin.file:
+        path: "{{ app_dir }}/backend"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: "0750"
+      become: true
+
+    - name: Copy the compose file
+      ansible.builtin.copy:
+        src: ../../docker-compose.prod.yml
+        dest: "{{ app_dir }}/docker-compose.prod.yml"
+        mode: "0640"
+
+    - name: Write the backend .env
+      ansible.builtin.copy:
+        content: "{{ backend_env }}\n"
+        dest: "{{ app_dir }}/backend/.env"
+        mode: "0600"
+      no_log: true
+
+    # Images
+
+    - name: Log in to GHCR
+      ansible.builtin.command:
+        cmd: docker login ghcr.io -u {{ ghcr_user }} --password-stdin
+        stdin: "{{ ghcr_token }}"
+      no_log: true
+      changed_when: false
+
+    - name: Pull the backend image
+      ansible.builtin.command:
+        cmd: "{{ compose }} pull backend"
+        chdir: "{{ app_dir }}"
+      environment:
+        IMAGE_TAG: "{{ image_tag }}"
+      changed_when: true
+
+    - name: Pull the frontend image
+      ansible.builtin.command:
+        cmd: docker pull {{ frontend_image }}:{{ image_tag }}
+      changed_when: true
+
+    # Backend
+
+    - name: Run database migrations
+      ansible.builtin.command:
+        cmd: "{{ compose }} run --rm backend alembic upgrade head"
+        chdir: "{{ app_dir }}"
+      environment:
+        IMAGE_TAG: "{{ image_tag }}"
+      changed_when: true
+
+    - name: Start the backend and Redis
+      ansible.builtin.command:
+        cmd: "{{ compose }} up -d --remove-orphans"
+        chdir: "{{ app_dir }}"
+      environment:
+        IMAGE_TAG: "{{ image_tag }}"
+      changed_when: true
+
+    - name: Wait for the backend to report healthy
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8000/api/health
+      register: health
+      retries: 12
+      delay: 5
+      until: health.status == 200
+
+    # Frontend
+
+    - name: Create the web folders
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: "0755"
+      loop:
+        - "{{ web_root }}"
+        - "{{ acme_root }}"
+      become: true
+
+    - name: Extract the frontend files from its image
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          rm -rf dist-new && mkdir dist-new
+          cid=$(docker create {{ frontend_image }}:{{ image_tag }} placeholder)
+          trap 'docker rm "$cid" >/dev/null' EXIT
+          docker cp "$cid":/dist/. dist-new/
+        chdir: "{{ app_dir }}"
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Publish the frontend files (removing ones the new build dropped)
+      ansible.builtin.command:
+        cmd: rsync -a --delete {{ app_dir }}/dist-new/ {{ web_root }}/
+      changed_when: true
+
+    # Nginx and HTTPS
+
+    - name: Check for an existing certificate
+      ansible.builtin.stat:
+        path: "/etc/letsencrypt/live/{{ app_domain }}/fullchain.pem"
+      register: cert
+      become: true
+
+    - name: Configure the Nginx site
+      ansible.builtin.template:
+        src: templates/nginx-site.conf.j2
+        dest: /etc/nginx/sites-available/abstract.conf
+        mode: "0644"
+      vars:
+        has_cert: "{{ cert.stat.exists }}"
+      become: true
+      notify: Reload Nginx
+
+    - name: Enable the Nginx site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/abstract.conf
+        dest: /etc/nginx/sites-enabled/abstract.conf
+        state: link
+      become: true
+      notify: Reload Nginx
+
+    - name: Apply the Nginx config now (Certbot needs it to answer challenges)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Get the HTTPS certificate (first deploy only)
+      ansible.builtin.command:
+        cmd: >-
+          certbot certonly --webroot -w {{ acme_root }} -d {{ app_domain }} -d www.{{ app_domain }}
+          --non-interactive --agree-tos
+          {{ ('-m ' ~ certbot_email) if certbot_email else '--register-unsafely-without-email' }}
+          --deploy-hook "systemctl reload nginx"
+        creates: "/etc/letsencrypt/live/{{ app_domain }}/fullchain.pem"
+      become: true
+      register: certbot
+
+    - name: Switch the Nginx site to HTTPS once the certificate exists
+      ansible.builtin.template:
+        src: templates/nginx-site.conf.j2
+        dest: /etc/nginx/sites-available/abstract.conf
+        mode: "0644"
+      vars:
+        has_cert: true
+      become: true
+      when: certbot.changed
+      notify: Reload Nginx
+
+  handlers:
+    - name: Reload Nginx
+      ansible.builtin.shell:
+        cmd: nginx -t && systemctl reload nginx
+      become: true

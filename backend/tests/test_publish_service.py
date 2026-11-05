@@ -2,6 +2,8 @@
 verification branches, and best-effort cleanup. DNS and SSH are mocked; the
 tests are DB backed because the domain/port conflict checks query projects."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.services.publish_service import (
@@ -21,8 +23,6 @@ from app.services.publish_service import (
     cleanup_publish,
     publish_project,
 )
-from datetime import datetime, timezone
-
 from tests.conftest import requires_db
 from tests.project_mocks import make_conn, ran_commands, result
 from tests.run_publish_mocks import make_server, seed_project
@@ -100,7 +100,7 @@ async def test_already_published_raises(mocker, db_session, test_user, dns_ok):
         test_user,
         domain="live.example.com",
         internal_port=3000,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
     with pytest.raises(AlreadyPublished):
         await run_publish(happy_conn(mocker), db_session, project, server, test_user)
@@ -130,7 +130,7 @@ async def test_domain_conflict_on_same_server_raises(
         runtime_status="running",
         domain=DOMAIN,
         internal_port=3000,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
     with pytest.raises(DomainAlreadyUsed):
         await run_publish(happy_conn(mocker), db_session, project, server, test_user)
@@ -149,7 +149,7 @@ async def test_port_conflict_on_same_server_raises(
         runtime_status="running",
         domain="other.example.com",
         internal_port=PORT,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
     with pytest.raises(PortAlreadyUsed):
         await run_publish(happy_conn(mocker), db_session, project, server, test_user)

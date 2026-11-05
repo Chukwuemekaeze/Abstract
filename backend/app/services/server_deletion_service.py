@@ -50,8 +50,8 @@ from app.services.server_reregistration_service import (
     generate_bootstrap_password,
     purge_server_projects,
 )
-from app.services.sshd_config import SshdDirectiveResult, apply_sshd_directive
 from app.services.ssh_service import SSHService
+from app.services.sshd_config import SshdDirectiveResult, apply_sshd_directive
 
 __all__ = [
     "DeleteOutcome",

@@ -9,7 +9,6 @@ down and the account is left intact.
 """
 
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 

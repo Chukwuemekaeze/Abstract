@@ -6,6 +6,8 @@ boundary; create_project is called directly, with the test owning the session
 exactly like the route handler does.
 """
 
+from datetime import UTC
+
 import pytest
 from sqlalchemy import select
 
@@ -19,7 +21,7 @@ from app.services.project_service import (
     ServerNotEligible,
     create_project,
 )
-from tests.conftest import FakeRedis, TEST_SESSION_ID, requires_db
+from tests.conftest import TEST_SESSION_ID, FakeRedis, requires_db
 from tests.project_mocks import (
     make_conn,
     make_github,
@@ -66,20 +68,20 @@ async def _call(db_session, test_user, server, mocker, conn=None, github=None, *
         "app.services.project_service.get_github_oauth_token",
         mocker.AsyncMock(return_value="gho_test_token"),
     )
-    defaults = dict(
-        name_from_client="Anibants",
-        server_id_from_client=server.id,
-        github_repo_id_from_client=REPO_ID,
-        github_repo_full_name_from_client=REPO_FULL_NAME,
-        current_user=test_user,
-        session_id=TEST_SESSION_ID,
-        db=db_session,
-        ssh=make_ssh(mocker, conn),
-        redis=FakeRedis(),
-        key_provider=get_key_provider(get_settings()),
-        clerk=mocker.MagicMock(),
-        github=github,
-    )
+    defaults = {
+        "name_from_client": "Anibants",
+        "server_id_from_client": server.id,
+        "github_repo_id_from_client": REPO_ID,
+        "github_repo_full_name_from_client": REPO_FULL_NAME,
+        "current_user": test_user,
+        "session_id": TEST_SESSION_ID,
+        "db": db_session,
+        "ssh": make_ssh(mocker, conn),
+        "redis": FakeRedis(),
+        "key_provider": get_key_provider(get_settings()),
+        "clerk": mocker.MagicMock(),
+        "github": github,
+    }
     defaults.update(kw)
     return await create_project(**defaults), conn, github
 
@@ -283,12 +285,12 @@ CLONE_PATH = "/home/deploy/anibantsdotNG"
 
 
 def _fake_pull_project():
-    from datetime import datetime, timezone
+    from datetime import datetime
     from types import SimpleNamespace
 
     return SimpleNamespace(
         clone_path=CLONE_PATH,
-        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
