@@ -4,7 +4,7 @@
 terraform {
   backend "s3" {
     bucket = "abstract-tofu-state"
-    key    = "abstract-test/terraform.tfstate"
+    key    = "abstract-prod/terraform.tfstate"
     region = "auto"
 
     # Lock file in the bucket, so two applies can't run at the same time.
