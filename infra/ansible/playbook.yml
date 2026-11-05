@@ -1,5 +1,5 @@
-- name: Set up the abstract-test server
-  hosts: abstract_test
+- name: Set up the Abstract server
+  hosts: abstract
   become: true
   vars:
     username: emeka

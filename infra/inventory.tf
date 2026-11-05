@@ -4,7 +4,7 @@ resource "local_file" "ansible_inventory" {
   filename        = "${path.module}/ansible/inventory.ini"
   file_permission = "0644"
   content         = <<-EOT
-    [abstract_test]
+    [abstract]
     ${local.server_ip}
   EOT
 }

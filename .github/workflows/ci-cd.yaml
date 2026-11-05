@@ -295,7 +295,7 @@ jobs:
         run: |
           tofu init -input=false
           ip=$(tofu output -raw server_ip)
-          printf '[abstract_test]\n%s\n' "$ip" > ansible/inventory.ini
+          printf '[abstract]\n%s\n' "$ip" > ansible/inventory.ini
           echo "SERVER_IP=$ip" >> "$GITHUB_ENV"
 
       - name: Set up SSH

@@ -3,7 +3,7 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name {{ app_domain }};
+    server_name {{ app_domain }} www.{{ app_domain }};
 
     # Let's Encrypt HTTP challenges (first issue and every renewal).
     location /.well-known/acme-challenge/ {
@@ -19,7 +19,7 @@ server {
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name {{ app_domain }};
+    server_name {{ app_domain }} www.{{ app_domain }};
 
     ssl_certificate /etc/letsencrypt/live/{{ app_domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ app_domain }}/privkey.pem;

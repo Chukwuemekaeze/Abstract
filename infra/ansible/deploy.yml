@@ -1,5 +1,5 @@
 - name: Deploy Abstract
-  hosts: abstract_test
+  hosts: abstract
   vars:
     app_user: emeka
     app_dir: "/home/{{ app_user }}/abstract"
@@ -157,7 +157,7 @@
     - name: Get the HTTPS certificate (first deploy only)
       ansible.builtin.command:
         cmd: >-
-          certbot certonly --webroot -w {{ acme_root }} -d {{ app_domain }}
+          certbot certonly --webroot -w {{ acme_root }} -d {{ app_domain }} -d www.{{ app_domain }}
           --non-interactive --agree-tos
           {{ ('-m ' ~ certbot_email) if certbot_email else '--register-unsafely-without-email' }}
           --deploy-hook "systemctl reload nginx"
