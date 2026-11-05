@@ -7,5 +7,5 @@ variable "username" {
 variable "ssh_public_key_path" {
   description = "Public half of the key pair used to log in as that user."
   type        = string
-  default     = "~/.ssh/abstract-test.pub"
+  default     = "~/.ssh/abstract-prod.pub"
 }

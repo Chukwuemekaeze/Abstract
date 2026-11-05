@@ -303,8 +303,8 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/abstract-test
-          chmod 600 ~/.ssh/abstract-test
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/abstract-prod
+          chmod 600 ~/.ssh/abstract-prod
           ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
 
       - name: Set up uv

@@ -28,10 +28,10 @@
         mode: "0440"
         validate: visudo -cf %s
 
-    - name: Let the user log in with the test SSH key
+    - name: Let the user log in with the SSH key
       ansible.posix.authorized_key:
         user: "{{ username }}"
-        key: "{{ lookup('ansible.builtin.file', '~/.ssh/abstract-test.pub') }}"
+        key: "{{ lookup('ansible.builtin.file', '~/.ssh/abstract-prod.pub') }}"
 
     # Never reboots: kernel updates wait for a manual reboot (no downtime).
     - name: Install all available package updates
