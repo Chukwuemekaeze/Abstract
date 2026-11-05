@@ -162,6 +162,10 @@ port 8000, so there is no CORS configuration to worry about during development.
 
 ## Production containers
 
+`.github/workflows/ci.yaml` runs on a push to any branch: lint, tests, security
+scans, then a build that pushes images to GHCR. `.github/workflows/deploy.yaml`
+deploys to production only after `ci` succeeds for a push to `main`.
+
 Production runs images built, scanned and pushed to GHCR by CI
 (`ghcr.io/chukwuemekaeze/abstract/backend` and `.../frontend`, tagged with the
 commit SHA); nothing is built on the box:
